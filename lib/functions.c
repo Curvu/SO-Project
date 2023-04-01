@@ -1,11 +1,8 @@
 #include "functions.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-/*
-  id: alfanumérico 3 a 32 caracteres
-  min, max: inteiros
-  chave: [a-Z0-9_] 3 a 32 caracteres
-*/
 int isAlpha(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
@@ -27,4 +24,15 @@ int verifyKey(char *key) {
   int length = strlen(key);
   for (int i = 0; i < length; i++) if (!isAlpha(key[i]) && !(key[i] != '_')) return 0;
   return 1;
+}
+
+void verifyParam(char *param, void *var, int type) {
+  int toggle; 
+  if (type) toggle = sscanf(param, " %d", (int*) var); // int
+  else toggle = sscanf(param, " %s", (char*) var); // string
+  
+  if (toggle == 0 || toggle == EOF) {
+    printf("Invalid parameter: %s\n", param);
+    exit(0);
+  }
 }
