@@ -1,8 +1,14 @@
-all: user_console
-user_console: user_console.c ./lib/functions.c
-	gcc -Wall -o $(OUTPUT_DIR)/user_console user_console.c ./lib/functions.c
-
 # Flags
 OUTPUT_DIR = bin
 
-#! Note: you need to create the 'bin' directory
+# Targets
+all: $(OUTPUT_DIR) user_console
+
+$(OUTPUT_DIR):
+	mkdir -p $(OUTPUT_DIR)
+
+user_console: user_console.c ./lib/functions.c
+	gcc -Wall -o $(OUTPUT_DIR)/$@ $^
+
+# $@ is the name of the target
+# $^ is the list of prerequisites
