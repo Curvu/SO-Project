@@ -3,6 +3,8 @@
 #include <string.h>
 #include "lib/functions.h"
 
+#define DEBUG
+
 // add_alert [id] [chave] [min] [max] > Adiciona uma nova regra de alerta ao sistema
 // remove_alert [id] > Remove uma regra de alerta do sistema
 // list_alerts > Lista todas as regras de alerta que existem no sistema 
@@ -12,56 +14,64 @@
 // exit > fecha o programa
 
 #define MAX 200
+#define STR 33
 
 int main(int argc, char **argv) {
-  int user;
-  if (argc != 2 || ((user = (int) strtol(argv[1], NULL, 10)) == 0 && argv[1][0] != '0')) {
-    printf("You must provide an ID, e.g. ./user_console 32\n");
-    return 1;
+  int user, temp = sscanf(argv[1], " %d", &user);
+  if (argc != 2 || temp == EOF || temp == 0) {
+    printf("You must provide a valid identifier, e.g. ./user_console 32\n");
+    exit(0);
   }
 
-  // TODO: check if user exists
+  #ifdef DEBUG
+    printf("Hello, user %d!\n", user);
+  #endif
 
-  printf("Hello, user %d!\n", user);
+  // TODO: check if user already exists
 
+
+  char command[MAX], id[STR], key[STR];
+  int min, max;
   while(1) {
-    char line[MAX];
-    fgets(line, 100, stdin);
-    line[strcspn(line, "\n")] = '\0'; // remove \n character
-    if (line[0] == '\0') continue; // ignora linhas vazias (se houver)
-
-
-    char *command = strtok(line, " "); // this is the command
+    scanf(" %s", command);
 
     if (strcmp(command, "add_alert") == 0) {
-      char *id = strtok(NULL, " ");
-      char *key = strtok(NULL, " ");
-      int min = (int) strtol(strtok(NULL, " "), NULL, 10);
-      int max = (int) strtol(strtok(NULL, " "), NULL, 10);
-      printf("id: %s, key: %s, min: %d, max: %d \n", id, key, min, max);
+      scanf(" %[^ ] %[^ ] %d %d", id, key, &min, &max);
+      if (!(verifyID(id) && verifyKey(key))) {
+        printf(">> Some invalid Parameter!!\n");
+        continue;
+      }
 
-      // TODO: check if id and key are valid, add alert
+      #ifdef DEBUG
+        printf("id: %s, key: %s, min: %d, max: %d \n", id, key, min, max);
+      #endif
 
+      // TODO: check if still have space for a new alert, and add it (dont understand this because [id] [key])
     } else if (strcmp(command, "remove_alert") == 0) {
-      char *id = strtok(NULL, " ");
-      printf("id: %s \n", id);
+      scanf(" %[^ ]", id);
+
+      #ifdef DEBUG
+        printf("id: %s \n", id);
+      #endif
 
       // TODO: check if id is valid, remove alert
-
     } else if (strcmp(command, "list_alerts") == 0) {
+      printf("this is the alert list.\n");
       // TODO: list alerts
     } else if (strcmp(command, "sensors") == 0) {
+      printf("this is the list of sensors\n");
       // TODO: list sensors
     } else if (strcmp(command, "stats") == 0) {
+      printf("list of stats\n");
       // TODO: list stats
     } else if (strcmp(command, "reset") == 0) {
+      printf("restting test\n");
       // TODO: reset stats
     } else if (strcmp(command, "exit") == 0) {
+      printf("bye bye!\n");
       // TODO: exit
       break;
-    } else {
-      printf("Invalid command\n");
-    }
+    } else printf("Invalid command\n");
   }
 
   // TODO: free everything
