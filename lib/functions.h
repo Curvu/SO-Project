@@ -2,13 +2,6 @@
 #define FUNCTIONS_H
 
 /**
- * @brief verify if string has between 3 and 32 characters
- * @param str string to be verified
- * @return 1 if length is valid, 0 otherwise
- */
-int verifyLength(char *);
-
-/**
  * @brief verify if id is alfa-numeric
  * @param id
  * @return 1 if id is valid, 0 otherwise

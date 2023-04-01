@@ -16,12 +16,14 @@ int verifyLength(char *str) {
 }
 
 int verifyID(char *id) {
+  if (!verifyLength(id)) return 0;
   int length = strlen(id);
   for (int i = 0; i < length; i++) if (!isAlpha(id[i])) return 0;
   return 1;
 }
 
 int verifyKey(char *key) {
+  if (!verifyLength(key)) return 0;
   int length = strlen(key);
   for (int i = 0; i < length; i++) if (!isAlpha(key[i]) && !(key[i] != '_')) return 0;
   return 1;
