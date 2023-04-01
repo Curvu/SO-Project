@@ -1,6 +1,8 @@
 all: user_console
-user_console: user_console.c
-	gcc $(CFLAGS) user_console.c -o user_console
+user_console: user_console.c ./lib/functions.c
+	gcc -Wall -o $(OUTPUT_DIR)/user_console user_console.c ./lib/functions.c
 
 # Flags
-CFLAGS = -Wall -Wextra -pedantic
+OUTPUT_DIR = bin
+
+#! Note: you need to create the 'bin' directory
