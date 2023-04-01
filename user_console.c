@@ -17,11 +17,13 @@
 #define STR 33
 
 int main(int argc, char **argv) {
-  int user, temp = sscanf(argv[1], " %d", &user);
-  if (argc != 2 || temp == EOF || temp == 0) {
-    printf("You must provide a valid identifier, e.g. ./user_console 32\n");
+  if (argc != 2) {
+    printf("You must do like this example: ./user_console 32\n");
     exit(0);
   }
+
+  int user;
+  verifyParam(argv[1], &user, 1);
 
   #ifdef DEBUG
     printf("Hello, user %d!\n", user);

@@ -15,4 +15,13 @@ int verifyID(char *);
  */
 int verifyKey(char *);
 
+/**
+ * @brief
+ * @param parameter
+ * @param var to attach the parameter
+ * @param type 1 is int otherwise is string
+ */
+void verifyParam(char *, void *, int);
+
+
 #endif // FUNCTIONS_H
