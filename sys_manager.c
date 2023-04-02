@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <signal.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <time.h>
 #include <sys/ipc.h>
@@ -11,103 +12,119 @@
 #include <semaphore.h>
 #include <pthread.h>
 
+#include "lib/functions.h"
 
+int QUEUE_SZ, N_WORKERS, MAX_KEYS, MAX_SENSORS, MAX_ALERTS;
+
+#define MUTEX_FILE "/mutex"
+
+/* Shared memory */
 typedef struct {
-	//TODO Não faço ideia do que por aqui
+	//TODO
 } mem_struct;
 
-// Semaphore for workers
-sem_t sem_workers;
+int shmid;
+mem_struct * mem;
+
+// Workers
+pid_t *workers; // array
+
+sem_t * sem_workers;
 
 pthread_t console_reader, sensor_reader, dispatcher;
-int shmid, *write_pos, *read_pos, *buf;
+int *write_pos, *read_pos;
 // pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-mem_struct* mem;
 
-// char *get_hour(){
-//     char *hour = malloc(8);
-//     time_t t = time(NULL);
-//     struct tm *timestruct = localtime(&t);
-//     sprintf(hour, "%d:%d:%d", timestruct->tm_hour, timestruct->tm_min, timestruct->tm_sec);
-//     return(hour);
-// }
-// De outra maneira (mais simples)
-char *get_hour(){
-	char *hour = malloc(8);
-	time_t t = time(NULL);
-	struct tm *timestruct = localtime(&t);
-	return(memcpy(hour, &asctime(timestruct)[11], 8));
-}
-
-void worker(int num){
+void worker(int num) {
 	//TODO Fazer o worker e sincronizar com semáforos
-	printf("%s WORKER %d READY\n", get_hour(), num);
+  sem_wait(sem_workers);
+  char buffer[MAX];
+  sprintf(buffer, "WORKER %d READY", num);
+  write_log(buffer);
+  sem_post(sem_workers);
+
+  while(1) { // provavelmente é para usar um cena para esperar atividade (não consome recursos)
+    // Do your thing
+  }
+
+  exit(0);
 }
 
-void* dispatcher_func(void* param){
-	int N_WORKERS = *((int*) param);
-	for (int i = 0; i < N_WORKERS; ++i){
-		if (fork() == 0){
-			worker(i+1);
-			exit(0);
-		}
-	}
-	for (int i = 0; i < N_WORKERS; ++i){
-		wait(NULL);
-	}
-	pthread_exit(NULL);
-	return NULL;
+void dispatcher_func() { // LEMBRAR QUE È PRECISO SINCRONIZAR COM OS WORKERS QUANDO NENHUM ESTÀ DISPONIVEL
+  return;
 }
 
+void cleanup() {
+  /* Kill workers */
+  for (int i = 0; i < (N_WORKERS); i++) kill(workers[i], SIGKILL);
 
-int main(int argc, char *argv[]){
-	// Verificação de argumentos
-	if (argc != 2){
-		printf("$home_iot {config file}\n");
-		return 1;
-	}
+  /* Remove shared memory */
+  shmdt(mem); // dettach from the shared memory
+  shmctl(shmid, IPC_RMID, NULL); // remove the shared memory
 
-	printf("%s HOME_IOT SIMULATOR STARTING\n", get_hour());
+  /* Remove Semaphores */
+  sem_close(sem_workers);
+  sem_unlink(MUTEX_FILE);
+}
 
-	// Handling do ficheiros
+int main(int argc, char **argv) {
+	if (argc != 2) {
+    printf("INVALID NUMBER OF ARGUMENTS\n");
+	  exit(0);
+  }
+
+  write_log("HOME_IOT SIMULATOR STARTING");
+
+	/* Handling file */
 	FILE *cfg = fopen(argv[1], "r");
-	if (cfg == NULL){
-		printf("%s ERROR OPENING CONFIG FILE\n", get_hour());
-		return 1;
+	if (cfg == NULL) {
+    write_log("ERROR OPENING CONFIG FILE");
+    fclose(cfg);
+		exit(0);
 	}
-	// FILE *log = freopen("log.txt", "w", stdout);
-	// //Encontrei essa função na net, escreve no ficheiro tudo que é escrito no terminal \o/
-	// if (log == NULL){
-	//     printf("%s ERROR OPENING LOG FILE\n", get_hour());
-	//     return 1;
-	// }
 
-	// Ler config
-	int QUEUE_SZ, N_WORKERS, MAX_KEYS, MAX_SENSORS, MAX_ALERTS;
+	/* Read Config */
 	fscanf(cfg, "%d\n%d\n%d\n%d\n%d", &QUEUE_SZ, &N_WORKERS, &MAX_KEYS, &MAX_SENSORS, &MAX_ALERTS);
-	if (QUEUE_SZ < 1 || N_WORKERS < 1 || MAX_KEYS < 1 || MAX_SENSORS < 1 || MAX_ALERTS < 0){
-		printf("%s ERROR IN CONFIG FILE\n", get_hour());
-		return 1;
+	if (QUEUE_SZ < 1 || N_WORKERS < 1 || MAX_KEYS < 1 || MAX_SENSORS < 1 || MAX_ALERTS < 0) {
+    write_log("ERROR IN CONFIG FILE");
+    fclose(cfg);
+		exit(0);
+	}
+  fclose(cfg);
+
+	/* Creating Shared Memory */
+	if ((shmid = shmget(IPC_PRIVATE, sizeof(mem_struct), IPC_CREAT | 0700)) == -1){
+    write_log("ERROR CREATING SHARED MEMORY");
+	  exit(0);
 	}
 
-	// Criação da memória partilhada
-	// shmid = shmget(IPC_PRIVATE, sizeof(mem_struct), IPC_CREAT | 0700);
-	// if (shmid == -1){
-	//     printf("%s ERROR CREATING SHARED MEMORY\n", get_hour());
-	//     return 1;
-	// }
-	mem = (mem_struct*) shmat(shmid, NULL, 0);
-	if (mem == NULL){
-		printf("%s ERROR ATTACHING SHARED MEMORY\n", get_hour());
-		return 1;
+	if ((mem = (mem_struct *) shmat(shmid, NULL, 0)) == (mem_struct *) -1) {
+    write_log("ERROR ATTACHING SHARED MEMORY");
+		exit(0);
 	}
 
-	// Criação do processo worker
-	if (fork() == 0){
-		//TODO
-	}
-	// Criação do proceso Alerts Watcher
-	if (fork() == 0){
+  /* Creating Semaphores */
+  if ((sem_workers = sem_open(MUTEX_FILE, O_CREAT, 0700, 1)) == SEM_FAILED) {
+    write_log("ERROR CREATING SEMAPHORE");
+    exit(0);
+  }
+
+  /* Creating Workers */
+  workers = malloc(N_WORKERS * sizeof(pid_t));
+  if (workers == NULL) {
+    write_log("ERROR WHILE CREATING WORKERS");
+    exit(0);
+  }
+  for (int i = 0; i < N_WORKERS; i++) {
+    if (fork() == 0) {
+      worker(i + 1);
+    }
+  }
+
+  /* Creating Dispatcher */
+
+	/* Creating Alerts Watcher */
+	if (fork() == 0) {
 		//TODO
 	}
 
@@ -121,16 +138,11 @@ int main(int argc, char *argv[]){
 	// 	printf("Error creating sensor reader thread\n");
 	// 	return 1;
 	// }
-	if (pthread_create(&dispatcher, NULL, dispatcher_func, &N_WORKERS) != 0){
-		printf("Error creating dispatcher thread\n");
-		return 1;
-	}
+	//if (pthread_create(&dispatcher, NULL, *dispatcher_func, NULL) != 0) {
+	//	printf("Error creating dispatcher thread\n");
+	//	return 1;
+	//}
 
-	// Criação do semáforo
-	// if (sem_init(&sem_workers, 1, N_WORKERS) != 0){
-	// 	printf("Error creating semaphore\n");
-	// 	return 1;
-	// }
 	// Espera pelas threads
 	// pthread_join(console_reader, NULL);
 	// pthread_join(sensor_reader, NULL);
