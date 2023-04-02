@@ -3,19 +3,6 @@
 #include <string.h>
 #include "lib/functions.h"
 
-#define DEBUG
-
-// add_alert [id] [chave] [min] [max] > Adiciona uma nova regra de alerta ao sistema
-// remove_alert [id] > Remove uma regra de alerta do sistema
-// list_alerts > Lista todas as regras de alerta que existem no sistema 
-// sensors > Lista todos os s ensors que enviaram dados ao sistema
-// stats > Apresenta estatísticas referentes aos dados enviados pelos sensores
-// reset > Limpa todas as estatísticas calculadas até ao momento pelo sistema (todos os sensores, criados por qualquer utilizador)
-// exit > fecha o programa
-
-#define MAX 200
-#define STR 33
-
 int main(int argc, char **argv) {
   if (argc != 2) {
     printf("You must do like this example: ./user_console 32\n");
