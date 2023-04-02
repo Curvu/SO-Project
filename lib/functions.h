@@ -1,6 +1,11 @@
 #ifndef FUNCTIONS_H
 #define FUNCTIONS_H
 
+#define DEBUG
+#define MAX 200
+#define STR 33
+#define LOG_FILE "log.txt"
+
 /**
  * @brief verify if id is alfa-numeric
  * @param id
@@ -23,5 +28,16 @@ int verifyKey(char *);
  */
 void verifyParam(char *, void *, int);
 
+/**
+ * @brief get hour:minute:second
+ * @param char* hour
+ */
+void get_hour(char *);
+
+/**
+ * @brief writes the log to terminal and file
+ * @param char* content
+ */
+void write_log(char *);
 
 #endif // FUNCTIONS_H
