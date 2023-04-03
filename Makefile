@@ -14,7 +14,7 @@ sensor: sensor.c ./lib/functions.c
 	gcc -Wall -o $(OUTPUT_DIR)/$@ $^
 
 home_iot: sys_manager.c ./lib/functions.c
-	gcc -Wall -o $(OUTPUT_DIR)/$@ $^
+	gcc -lpthread -D_REENTRANT -Wall -o $(OUTPUT_DIR)/$@ $^
 
 # $@ is the name of the target
 # $^ is the list of prerequisites
