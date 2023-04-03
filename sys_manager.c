@@ -17,6 +17,7 @@
 int QUEUE_SZ, N_WORKERS, MAX_KEYS, MAX_SENSORS, MAX_ALERTS;
 
 #define MUTEX_FILE "/mutex"
+#define MUTEX_LOG_FILE "/log_mutex"
 
 /* Shared memory */
 typedef struct {
@@ -26,32 +27,73 @@ typedef struct {
 int shmid;
 mem_struct * mem;
 
-// Workers
-pid_t *workers; // array
+sem_t * sem_log; // binary
 
+/* Workers */
+pid_t * workers; // array
 sem_t * sem_workers;
 
-pthread_t console_reader, sensor_reader, dispatcher;
+/* Thread Sensor Reader */
+pthread_t sensor_reader;
+
+/* Thread Console Reader */
+pthread_t console_reader;
 int *write_pos, *read_pos;
-// pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Thread Dispatcher */
+pthread_t dispatcher;
+pthread_mutex_t disp_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void block_write_log(char *content) {
+  sem_wait(sem_log);
+  write_log(content);
+  sem_post(sem_log);
+}
 
 void worker(int num) {
-	//TODO Fazer o worker e sincronizar com semáforos
-  sem_wait(sem_workers);
   char buffer[MAX];
   sprintf(buffer, "WORKER %d READY", num);
-  write_log(buffer);
-  sem_post(sem_workers);
+  block_write_log(buffer);
 
-  while(1) { // provavelmente é para usar um cena para esperar atividade (não consome recursos)
+  while(1) {
+    // wait for a job
+    
+    sem_wait(sem_workers);
     // Do your thing
+    sem_post(sem_workers);
   }
 
   exit(0);
 }
 
-void dispatcher_func() { // LEMBRAR QUE È PRECISO SINCRONIZAR COM OS WORKERS QUANDO NENHUM ESTÀ DISPONIVEL
-  return;
+void alert_watcher() {
+  // ve os alertas e o que foi gerado pelo sensor
+  // envia mensagem
+  exit(0);
+}
+
+void * sensor_reader_func(void * param) {
+  block_write_log("THREAD SENSOR_READER CREATED");
+
+  // Do your thing
+
+  pthread_exit(NULL);
+}
+
+void * console_reader_func(void * param) {
+  block_write_log("THREAD CONSOLE_READER CREATED");
+
+  // Do your thing
+
+  pthread_exit(NULL);
+}
+
+void * dispatcher_func(void * param) { // LEMBRAR QUE È PRECISO SINCRONIZAR COM OS WORKERS QUANDO NENHUM ESTÀ DISPONIVEL
+  block_write_log("THREAD DISPATCHER CREATED");
+
+  // Do your thing
+
+  pthread_exit(NULL);
 }
 
 void cleanup() {
@@ -63,8 +105,18 @@ void cleanup() {
   shmctl(shmid, IPC_RMID, NULL); // remove the shared memory
 
   /* Remove Semaphores */
-  sem_close(sem_workers);
   sem_unlink(MUTEX_FILE);
+  sem_close(sem_workers);
+  sem_unlink(MUTEX_LOG_FILE);
+  sem_close(sem_log);
+
+  /* Remove Threads */
+  pthread_cancel(sensor_reader);
+  pthread_cancel(console_reader);
+  pthread_cancel(dispatcher);
+
+  block_write_log("HOME_IOT SIMULATOR CLOSING");
+  exit(0);
 }
 
 int main(int argc, char **argv) {
@@ -104,47 +156,51 @@ int main(int argc, char **argv) {
 	}
 
   /* Creating Semaphores */
-  if ((sem_workers = sem_open(MUTEX_FILE, O_CREAT, 0700, 1)) == SEM_FAILED) {
-    write_log("ERROR CREATING SEMAPHORE");
+  if ((sem_workers = sem_open(MUTEX_FILE, O_CREAT, 0700, N_WORKERS)) == SEM_FAILED) {
+    write_log("ERROR CREATING WORKERS SEMAPHORE");
+    exit(0);
+  }
+
+  if ((sem_log = sem_open(MUTEX_LOG_FILE, O_CREAT, 0700, 1)) == SEM_FAILED) {
+    write_log("ERROR CREATING LOG SEMAPHORE");
+    exit(0);
+  }
+
+  /* Sensor Reader */
+  if (pthread_create(&sensor_reader, NULL, sensor_reader_func, NULL) != 0) {
+    block_write_log("ERROR CREATING SENSOR_READER");
+    exit(0);
+  }
+
+  /* Console Reader */
+  if (pthread_create(&console_reader, NULL, console_reader_func, NULL) != 0) {
+    block_write_log("ERROR CREATING CONSOLE_READER");
+    exit(0);
+  }
+
+  /* Dispatcher */
+  if (pthread_create(&dispatcher, NULL, dispatcher_func, NULL) != 0) {
+    block_write_log("ERROR CREATING DISPATCHER");
     exit(0);
   }
 
   /* Creating Workers */
   workers = malloc(N_WORKERS * sizeof(pid_t));
   if (workers == NULL) {
-    write_log("ERROR WHILE CREATING WORKERS");
+    block_write_log("ERROR WHILE CREATING WORKERS");
     exit(0);
   }
   for (int i = 0; i < N_WORKERS; i++) {
-    if (fork() == 0) {
-      worker(i + 1);
-    }
+    if (fork() == 0) worker(i + 1);
   }
 
-  /* Creating Dispatcher */
-
-	/* Creating Alerts Watcher */
-	if (fork() == 0) {
-		//TODO
-	}
-
-	// Criação das threads
-	// TODO Ainda não possuimos as funções das threads
-	// if (pthread_create(&console_reader, NULL, console_reader, NULL) != 0){
-	// 	printf("Error creating console reader thread\n");
-	// 	return 1;
-	// }
-	// if (pthread_create(&sensor_reader, NULL, sensor_reader, NULL) != 0){
-	// 	printf("Error creating sensor reader thread\n");
-	// 	return 1;
-	// }
-	//if (pthread_create(&dispatcher, NULL, *dispatcher_func, NULL) != 0) {
-	//	printf("Error creating dispatcher thread\n");
-	//	return 1;
-	//}
+  /* Creating Alerts Watcher */
+  if (fork() == 0) alert_watcher();
 
 	// Espera pelas threads
-	// pthread_join(console_reader, NULL);
-	// pthread_join(sensor_reader, NULL);
+	pthread_join(console_reader, NULL);
+	pthread_join(sensor_reader, NULL);
 	pthread_join(dispatcher, NULL);
+
+  return 0;
 }
