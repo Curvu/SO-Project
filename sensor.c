@@ -6,8 +6,6 @@
 #include <signal.h>
 #include "lib/functions.h"
 
-#define STR 33
-
 int count = 0;
 
 void ctrlz_handler(int signo) {
@@ -19,6 +17,10 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
     printf("You must do like this example: ./user_console SENS1 3 HOUSETEMP 10 100\n");
     exit(0);
   }
+
+  #ifdef DEBUG
+    printf("Starting sensor!\n");
+  #endif /* DEBUG */
 
   char id[STR], key[STR];
   int inter, min, max;
@@ -42,7 +44,11 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
     if (time(NULL) - init >= inter) { // if time passed is equal or greater than interval
       init = time(NULL);
       value = (rand() % (max - min + 1)) + min;
-      printf("%s#%s#%d\n", id, key, value); // ID_sensor#Key#Value
+      
+      #ifdef DEBUG
+        printf("%s#%s#%d\n", id, key, value); // ID_sensor#Key#Value
+      #endif /* DEBUG */
+
       count++;
     }
   }
