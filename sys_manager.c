@@ -26,8 +26,13 @@ typedef struct {
 int shmid;
 Mem_struct * mem;
 
+
+/* Signal Actions */
+struct sigaction act;
+
 /* Workers */
 sem_t * sem_workers;
+pid_t *processes; 
 
 /* Thread Sensor Reader */
 pthread_t sensor_reader;
@@ -85,7 +90,7 @@ void * dispatcher_func(void * param) { // LEMBRAR QUE È PRECISO SINCRONIZAR COM
   pthread_exit(NULL);
 }
 
-void cleanup(pid_t * processes) {
+void cleanup() {
   #ifdef DEBUG
     printf("DEBUG >> Killing all processes!\n");
   #endif
@@ -118,6 +123,14 @@ void cleanup(pid_t * processes) {
     printf("DEBUG >> leaving!\n");
   #endif
   write_log("HOME_IOT SIMULATOR CLOSING");
+}
+
+void sigint_handler(int sig) {
+  printf("\n"); // Só para ficar bonito
+  write_log("SIGNAL SIGINT RECEIVED");
+  write_log("HOME_IOT SIMULATOR WAITING FOR LAST TASKS TO FINISH");
+  cleanup();
+  exit(0);
 }
 
 int main(int argc, char **argv) {
@@ -201,7 +214,7 @@ int main(int argc, char **argv) {
   #endif
 
   /* Creating Workers */
-  pid_t processes[N_WORKERS + 1];
+  processes = malloc(sizeof(pid_t) * (N_WORKERS + 1));
   for (int i = 0; i < N_WORKERS; i++) {
     pid_t pid = fork();
     if (pid == -1) {
@@ -229,11 +242,20 @@ int main(int argc, char **argv) {
 	pthread_join(console_reader, NULL);
 	pthread_join(sensor_reader, NULL);
 	pthread_join(dispatcher, NULL);
+  
+  act.sa_flags = 0;
+  sigfillset(&act.sa_mask);
+  act.sa_handler = sigint_handler;
+  sigaction(SIGINT, &act, NULL);
+  while(1){
+    printf("Esta ação vai repetir de 10 em 10 segundos\nPara terminar o programa, pressione CTRL+C\n");
+    sleep(10);
+  }
 
   #ifdef DEBUG
     printf("DEBUG >> Cleaning up!\n");
   #endif
-  cleanup(processes);
+  // cleanup(processes);
 
   return 0;
 }
