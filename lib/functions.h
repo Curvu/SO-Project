@@ -4,7 +4,6 @@
 #define DEBUG
 #define MAX 200
 #define STR 33
-#define LOG_FILE "log.txt"
 
 /**
  * @brief verify if id is alfa-numeric
@@ -33,11 +32,5 @@ void verifyParam(char *, void *, int);
  * @param char* hour
  */
 void get_hour(char *);
-
-/**
- * @brief writes the log to terminal and file
- * @param char* content
- */
-void write_log(char *);
 
 #endif // FUNCTIONS_H
