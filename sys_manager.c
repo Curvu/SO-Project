@@ -14,9 +14,11 @@
 
 #include "lib/functions.h"
 
-int QUEUE_SZ, N_WORKERS, MAX_KEYS, MAX_SENSORS, MAX_ALERTS;
-
 #define MUTEX_FILE "/mutex"
+#define LOG_FILE "log.txt"
+
+int QUEUE_SZ, N_WORKERS, MAX_KEYS, MAX_SENSORS, MAX_ALERTS;
+FILE *fp;
 
 /* Shared memory */
 typedef struct {
@@ -26,13 +28,16 @@ typedef struct {
 int shmid;
 Mem_struct * mem;
 
+/* Mutex for write_log */
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+// TODO: mutex para ver se alguem ainda está a trabalhar
 
 /* Signal Actions */
 struct sigaction act;
 
 /* Workers */
 sem_t * sem_workers;
-pid_t *processes; 
+pid_t * processes; 
 
 /* Thread Sensor Reader */
 pthread_t sensor_reader;
@@ -43,78 +48,97 @@ int *write_pos, *read_pos;
 
 /* Thread Dispatcher */
 pthread_t dispatcher;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t disp_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void write_log(FILE *fp, char * content) {
+  pthread_mutex_lock(&log_mutex);
+  char hour[7], buffer[MAX];
+  get_hour(hour);
+  sprintf(buffer, "%s %s", hour, content);
+  fprintf(fp, "%s\n", buffer);
+  fflush(fp);
+  printf("%s\n", buffer);
+  pthread_mutex_unlock(&log_mutex);
+}
 
 void worker(int num) {
   char buffer[MAX];
   sprintf(buffer, "WORKER %d READY", num);
-  write_log(buffer);
+  write_log(fp, buffer);
 
   while(1) {
-    // wait for a job
-    
     sem_wait(sem_workers);
     // Do your thing
     sem_post(sem_workers);
-    exit(0);
+    pthread_cond_signal(&cond);
   }
+
+  exit(0);
 }
 
 void alert_watcher() {
   // ve os alertas e o que foi gerado pelo sensor
   // envia mensagem
+  printf("ALERT WATCHER READY\n");
   exit(0);
 }
 
 void * sensor_reader_func(void * param) {
-  write_log("THREAD SENSOR_READER CREATED");
-
+  write_log(fp, "THREAD SENSOR_READER CREATED");
   // Do your thing
 
   pthread_exit(NULL);
 }
 
 void * console_reader_func(void * param) {
-  write_log("THREAD CONSOLE_READER CREATED");
-
+  write_log(fp, "THREAD CONSOLE_READER CREATED");
   // Do your thing
 
   pthread_exit(NULL);
 }
 
 void * dispatcher_func(void * param) { // LEMBRAR QUE È PRECISO SINCRONIZAR COM OS WORKERS QUANDO NENHUM ESTÀ DISPONIVEL
-  write_log("THREAD DISPATCHER CREATED");
+  write_log(fp, "THREAD DISPATCHER CREATED");
 
   // Do your thing
+  while (1) {
+    // check if there is a worker available
+    if (sem_trywait(sem_workers) == 0) {
+      sem_post(sem_workers);
+      // if there is, send the job to the worker
+
+      // if there isn't, wait for a worker to be available
+    } else pthread_cond_wait(&cond, &disp_mutex);
+  }
+
 
   pthread_exit(NULL);
 }
 
 void cleanup() {
-  #ifdef DEBUG
-    printf("DEBUG >> Killing all processes!\n");
-  #endif
   /* Kill all processes */
-  for (int i = 0; i < N_WORKERS; i++) kill(processes[i], SIGKILL);
+  for (int i = 0; i < N_WORKERS; i++) {
+    #ifdef DEBUG
+      printf("DEBUG >> %d worker being deleted!\n", processes[i]);
+    #endif 
+    kill(processes[i], SIGKILL);
+  }
+  printf("DEBUG >> all workers deleted!\n");
 
-  #ifdef DEBUG
-    printf("DEBUG >> Deleting semaphores!\n");
-  #endif
+
   /* Remove Semaphores */
   sem_unlink(MUTEX_FILE);
   sem_close(sem_workers);
 
-  #ifdef DEBUG
-    printf("DEBUG >> Deleting threads!\n");
-  #endif
   /* Remove Threads */
   pthread_cancel(sensor_reader);
   pthread_cancel(console_reader);
   pthread_cancel(dispatcher);
+  pthread_mutex_destroy(&disp_mutex);
+  pthread_mutex_destroy(&log_mutex);
+  pthread_cond_destroy(&cond);
 
-  #ifdef DEBUG
-    printf("DEBUG >> Deleting shared memory!\n");
-  #endif
   /* Remove shared memory */
   shmctl(shmid, IPC_RMID, NULL); // remove the shared memory
   shmdt(mem); // dettach from the shared memory
@@ -122,13 +146,12 @@ void cleanup() {
   #ifdef DEBUG
     printf("DEBUG >> leaving!\n");
   #endif
-  write_log("HOME_IOT SIMULATOR CLOSING");
+  write_log(fp, "HOME_IOT SIMULATOR CLOSING");
+  fclose(fp);
 }
 
 void sigint_handler(int sig) {
-  printf("\n"); // Só para ficar bonito
-  write_log("SIGNAL SIGINT RECEIVED");
-  write_log("HOME_IOT SIMULATOR WAITING FOR LAST TASKS TO FINISH");
+  // TODO: finish me
   cleanup();
   exit(0);
 }
@@ -136,15 +159,27 @@ void sigint_handler(int sig) {
 int main(int argc, char **argv) {
 	if (argc != 2) {
     printf("INVALID NUMBER OF ARGUMENTS\n");
-	  exit(0);
+    exit(0);
   }
 
-  write_log("HOME_IOT SIMULATOR STARTING");
+  fp = fopen(LOG_FILE, "a+");
+  if (fp == NULL) {
+    printf("ERROR OPENING LOG FILE\n");
+    exit(0);
+  }
+
+  // Log mutex
+  if (pthread_mutex_init(&log_mutex, NULL) != 0) {
+    write_log(fp, "ERROR CREATING LOG MUTEX");
+    exit(0);
+  }
+
+  write_log(fp, "HOME_IOT SIMULATOR STARTING");
 
 	/* Handling file */
 	FILE *cfg = fopen(argv[1], "r");
 	if (cfg == NULL) {
-    write_log("ERROR OPENING CONFIG FILE");
+    write_log(fp, "ERROR OPENING CONFIG FILE");
     fclose(cfg);
 		exit(0);
 	}
@@ -152,11 +187,16 @@ int main(int argc, char **argv) {
 	/* Read Config */
 	fscanf(cfg, "%d\n%d\n%d\n%d\n%d", &QUEUE_SZ, &N_WORKERS, &MAX_KEYS, &MAX_SENSORS, &MAX_ALERTS);
 	if (QUEUE_SZ < 1 || N_WORKERS < 1 || MAX_KEYS < 1 || MAX_SENSORS < 1 || MAX_ALERTS < 0) {
-    write_log("ERROR IN CONFIG FILE");
+    write_log(fp, "ERROR IN CONFIG FILE");
     fclose(cfg);
 		exit(0);
 	}
   fclose(cfg);
+
+  if ((processes = (pid_t *) malloc((N_WORKERS + 1) * sizeof(pid_t))) == NULL) {
+    write_log(fp, "ERROR ALLOCATING MEMORY");
+    exit(0);
+  }
 
   #ifdef DEBUG
     printf("DEBUG >> Creating shared memory!\n");
@@ -164,16 +204,16 @@ int main(int argc, char **argv) {
 
 	/* Creating Shared Memory */
 	if ((shmid = shmget(IPC_PRIVATE, sizeof(Mem_struct*), 0666 | IPC_CREAT)) == -1){
-    write_log("ERROR CREATING SHARED MEMORY");
-	  exit(0);
+    write_log(fp, "ERROR CREATING SHARED MEMORY");
+    exit(0);
 	}
 
   #ifdef DEBUG
-    printf("DEBUG >> %d\n", shmid);
+    printf("DEBUG >> shmid = %d\n", shmid);
   #endif
 
 	if ((mem = (Mem_struct *) shmat(shmid, NULL, 0)) == (Mem_struct *) -1) {
-    write_log("ERROR ATTACHING SHARED MEMORY");
+    write_log(fp, "ERROR ATTACHING SHARED MEMORY");
 		exit(0);
 	}
 
@@ -183,79 +223,71 @@ int main(int argc, char **argv) {
 
   /* Creating Semaphores */
   if ((sem_workers = sem_open(MUTEX_FILE, O_CREAT, 0700, N_WORKERS)) == SEM_FAILED) {
-    write_log("ERROR CREATING WORKERS SEMAPHORE");
+    write_log(fp, "ERROR CREATING WORKERS SEMAPHORE");
     exit(0);
   }
 
+  // THREADS!!
   #ifdef DEBUG
     printf("DEBUG >> Creating threads!\n");
   #endif
 
   /* Sensor Reader */
   if (pthread_create(&sensor_reader, NULL, sensor_reader_func, NULL) != 0) {
-    write_log("ERROR CREATING SENSOR_READER");
+    write_log(fp, "ERROR CREATING SENSOR_READER");
     exit(0);
   }
 
   /* Console Reader */
   if (pthread_create(&console_reader, NULL, console_reader_func, NULL) != 0) {
-    write_log("ERROR CREATING CONSOLE_READER");
+    write_log(fp, "ERROR CREATING CONSOLE_READER");
     exit(0);
   }
 
   /* Dispatcher */
   if (pthread_create(&dispatcher, NULL, dispatcher_func, NULL) != 0) {
-    write_log("ERROR CREATING DISPATCHER");
+    write_log(fp, "ERROR CREATING DISPATCHER");
     exit(0);
   }
 
   #ifdef DEBUG
-    printf("DEBUG >> Creating processes!\n");
+    printf("DEBUG >> Creating workers!\n");
   #endif
 
-  /* Creating Workers */
-  processes = malloc(sizeof(pid_t) * (N_WORKERS + 1));
+  /* Workers */
   for (int i = 0; i < N_WORKERS; i++) {
-    pid_t pid = fork();
-    if (pid == -1) {
-      write_log("ERROR CREATING WORKER");
+    if ((processes[i] = fork()) == 0) {
+      worker(i + 1);
       exit(0);
-    } else if (pid == 0) {
-      processes[i] = getpid();
-      worker(i);
+    } else if (processes[i] < 0) {
+      write_log(fp, "ERROR CREATING WORKER");
       exit(0);
-    } else processes[i] = pid;
+    }
   }
 
-  /* Creating Alerts Watcher */
-  pid_t pid = fork();
-  if (pid == -1) {
-    write_log("ERROR CREATING ALERTS WATCHER");
-    exit(0);
-  } else if (pid == 0) {
-    processes[N_WORKERS] = getpid();
+  #ifdef DEBUG
+    printf("DEBUG >> Creating alerts watcher!\n");
+  #endif
+
+  /* Alerts Watcher */
+  if ((processes[N_WORKERS] = fork()) == 0) {
     alert_watcher();
     exit(0);
-  } else processes[N_WORKERS] = pid;
-
-	// Espera pelas threads
-	pthread_join(console_reader, NULL);
-	pthread_join(sensor_reader, NULL);
-	pthread_join(dispatcher, NULL);
-  
-  act.sa_flags = 0;
-  sigfillset(&act.sa_mask);
-  act.sa_handler = sigint_handler;
-  sigaction(SIGINT, &act, NULL);
-  while(1){
-    printf("Esta ação vai repetir de 10 em 10 segundos\nPara terminar o programa, pressione CTRL+C\n");
-    sleep(10);
+  } else if (processes[N_WORKERS] < 0) {
+    write_log(fp, "ERROR CREATING ALERTS WATCHER");
+    exit(0);
   }
 
-  #ifdef DEBUG
-    printf("DEBUG >> Cleaning up!\n");
-  #endif
-  // cleanup(processes);
-
+  act.sa_flags = 0;
+  sigemptyset(&act.sa_mask);
+  act.sa_handler = sigint_handler;
+  sigaction(SIGINT, &act, NULL);
+  
+  pthread_join(sensor_reader, NULL);
+  pthread_join(console_reader, NULL);
+  pthread_join(dispatcher, NULL);
+  for (int i = 0; i < N_WORKERS; i++) waitpid(processes[i], NULL, 0);
+  cleanup();
+  
   return 0;
 }
