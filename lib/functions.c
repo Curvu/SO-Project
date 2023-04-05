@@ -43,16 +43,3 @@ void get_hour(char * hour) {
 	struct tm *t = localtime(&sec);
   sprintf(hour, "%02d:%02d:%02d", t->tm_hour, t->tm_min, t->tm_sec);
 }
-
-void write_log(char * content) {
-  char hour[7], buffer[MAX];
-  get_hour(hour);
-  sprintf(buffer, "%s %s", hour, content);
-
-  FILE *fp = fopen(LOG_FILE, "a+");
-  if (fp != NULL) {
-    fprintf(fp, "%s\n", buffer);
-    printf("%s\n", buffer);
-  } else printf("COULD NOT OPEN LOG FILE!\n");
-  fclose(fp);
-}

@@ -14,7 +14,7 @@ void ctrlz_handler(int signo) {
 
 int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <valor min> <valor maximo>
   if (argc != 6) {
-    printf("You must do like this example: ./user_console SENS1 3 HOUSETEMP 10 100\n");
+    printf("You must do like this example: ./sensor SENS1 3 HOUSETEMP 10 100\n");
     exit(0);
   }
 
