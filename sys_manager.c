@@ -22,17 +22,9 @@ FILE *fp;
 int available_workers = 0;
 
 /* Shared memory */
-typedef struct {
-  int sens, cons, disp;
-  char *sensors;
-} Mem_struct;
-
 int shmid;
 Mem_struct * mem;
-
-/* Mutexs */
-pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t kill_mutex = PTHREAD_MUTEX_INITIALIZER;
+sem_t * shared_memory_sem;
 
 /* Signal Actions */
 struct sigaction act; // main
@@ -41,15 +33,13 @@ struct sigaction act; // main
 sem_t semaphore, process_log, BLOCK_WORKER;
 pid_t * processes; 
 
-/* Thread Sensor Reader */
-pthread_t sensor_reader;
+/* Thread Sensor Reader, Console Reader, Dispatcher */
+pthread_t sensor_reader, console_reader, dispatcher;
 
-/* Thread Console Reader */
-pthread_t console_reader;
-
-/* Thread Dispatcher */
-pthread_t dispatcher;
+/* Mutexs */
 pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t kill_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t disp_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int needQuit(pthread_mutex_t * mutex) {
@@ -118,7 +108,6 @@ void * sensor_reader_func(void * param) {
     // read from sensors
     // send to dispatcher
   }
-
   pthread_exit(NULL);
 }
 
@@ -131,7 +120,6 @@ void * console_reader_func(void * param) {
     // read from console
     // send to dispatcher
   }
-
   pthread_exit(NULL);
 }
 
@@ -146,7 +134,6 @@ void * dispatcher_func(void * param) {
       
     }
   }
-
   pthread_exit(NULL);
 }
 
@@ -164,6 +151,9 @@ void cleanup() {
   /* Remove Semaphores */
   sem_destroy(&semaphore);
   sem_destroy(&process_log);
+  sem_destroy(&BLOCK_WORKER);
+  sem_close(shared_memory_sem);
+  sem_unlink(SEM_FILE);
 
   /* Remove Threads */
   pthread_mutex_unlock(&kill_mutex);
@@ -233,20 +223,6 @@ int main(int argc, char **argv) {
   sigaction(SIGINT, &act, NULL);
 
   /* Mutexes */
-  if (pthread_mutex_init(&log_mutex, NULL) != 0) {
-    printf("ERROR >> CREATING LOG MUTEX\n");
-    exit(0);
-  }
-
-  if (pthread_mutex_init(&disp_mutex, NULL) != 0) {
-    printf("ERROR >> CREATING DISPATCHER MUTEX\n");
-    exit(0);
-  }
-
-  if (pthread_mutex_init(&kill_mutex, NULL) != 0) {
-    printf("ERROR >> CREATING KILL MUTEX\n");
-    exit(0);
-  }
   pthread_mutex_lock(&kill_mutex);
 
   if (pthread_cond_init(&cond, NULL) != 0) {
@@ -270,6 +246,11 @@ int main(int argc, char **argv) {
     exit(0);
   }
 
+  if ((shared_memory_sem = sem_open(SEM_FILE, O_CREAT, 0666, 1)) == SEM_FAILED) {
+    printf("ERROR >> CREATING SHARED MEMORY SEMAPHORE\n");
+    exit(0);
+  }
+
   /* Main */
   write_log(fp, "HOME_IOT SIMULATOR STARTING");
 
@@ -279,7 +260,7 @@ int main(int argc, char **argv) {
   }
 
 	/* Shared Memory */
-	if ((shmid = shmget(IPC_PRIVATE, sizeof(Mem_struct*), 0666 | IPC_CREAT)) == -1){
+	if ((shmid = shmget(SHM_KEY, sizeof(Mem_struct*), 0666 | IPC_CREAT | IPC_EXCL)) == -1) {
     printf("ERROR >> CREATING SHARED MEMORY\n");
     exit(0);
 	}
@@ -296,6 +277,11 @@ int main(int argc, char **argv) {
   mem->cons = 0;
   mem->sens = 0;
   mem->disp = 0;
+  mem->max_sensors = MAX_SENSORS;
+  mem->max_alerts = MAX_ALERTS;
+  // mem->sensors = (Sensor *) malloc(MAX_SENSORS * sizeof(Sensor));
+  for (int i = 0; i < MAX_SENSORS; i++) mem->sensors[i] = NULL_SENSOR;
+
 
   /* Sensor Reader */
   if (pthread_create(&sensor_reader, NULL, sensor_reader_func, NULL) != 0) {
