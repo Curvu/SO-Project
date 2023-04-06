@@ -8,10 +8,10 @@ $(OUTPUT_DIR):
 	mkdir -p $(OUTPUT_DIR)
 
 user_console: user_console.c ./lib/functions.c
-	gcc -Wall -o $(OUTPUT_DIR)/$@ $^
+	gcc -Wall -g -o $(OUTPUT_DIR)/$@ $^
 
 sensor: sensor.c ./lib/functions.c
-	gcc -Wall -o $(OUTPUT_DIR)/$@ $^
+	gcc -Wall -g -o $(OUTPUT_DIR)/$@ $^
 
 home_iot: sys_manager.c ./lib/functions.c
 	gcc -pthread -D_REENTRANT -Wall -g -o $(OUTPUT_DIR)/$@ $^
