@@ -1,7 +1,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <sys/shm.h>
+#include <sys/ipc.h>
+#include <semaphore.h>
 #include "lib/functions.h"
+
+/* Shared memory */
+int shmid;
+Mem_struct * mem;
+sem_t * shared_memory_sem;
+
+struct sigaction act;
+
+void cleanup() {
+  shmdt(mem);
+}
+
+void ctrlc_handler(int signo) {
+  cleanup();
+  exit(0);
+}
 
 int main(int argc, char **argv) {
   if (argc != 2) {
@@ -18,7 +38,38 @@ int main(int argc, char **argv) {
 
   // TODO: check if user already exists
 
+  /* Semaphore */
+  if ((shared_memory_sem = sem_open(SEM_FILE, 0)) == SEM_FAILED) {
+    printf("ERROR >> SHARED MEMORY SEMAPHORE\n");
+    exit(0);
+  }
 
+  /* Shared Memory */
+	if ((shmid = shmget(SHM_KEY, sizeof(Mem_struct*), 0666)) == -1) {
+    printf("ERROR >> SHARED MEMORY NOT FOUND\n");
+    exit(0);
+	}
+
+  #ifdef DEBUG
+    printf("DEBUG >> shmid = %d\n", shmid);
+  #endif
+
+	if ((mem = (Mem_struct *) shmat(shmid, NULL, 0)) == (Mem_struct *) -1) {
+    printf("ERROR >> ATTACHING SHARED MEMORY\n");
+		exit(0);
+	}
+
+  #ifdef DEBUG
+    printf("Shared Memory (max_sensors): %d\n", mem->max_sensors);
+  #endif
+
+  /* Signal Handler */
+  act.sa_flags = 0;
+  sigemptyset(&act.sa_mask); // Block all signals during handler
+  act.sa_handler = ctrlc_handler;
+  sigaction(SIGINT, &act, NULL);
+
+  /* Main */
   char command[MAX], id[STR], key[STR];
   int min, max;
   while(1) {
@@ -48,8 +99,13 @@ int main(int argc, char **argv) {
       printf("this is the alert list.\n");
       // TODO: list alerts
     } else if (strcmp(command, "sensors") == 0) {
-      printf("this is the list of sensors\n");
-      // TODO: list sensors
+      sem_wait(shared_memory_sem);
+      for (int i = 0; i < mem->max_sensors; i++) {
+        if (!compareSensor(&NULL_SENSOR, &mem->sensors[i])) {
+          printf("Sensor %s, Key %s, Min %d, Max %d, Interval %d\n", mem->sensors[i].id, mem->sensors[i].key, mem->sensors[i].min, mem->sensors[i].max, mem->sensors[i].inter);
+        }
+      }
+      sem_post(shared_memory_sem);
     } else if (strcmp(command, "stats") == 0) {
       printf("list of stats\n");
       // TODO: list stats
