@@ -22,9 +22,15 @@ FILE *fp;
 int available_workers = 0;
 
 /* Shared memory */
+typedef struct {
+  int sens, cons, disp;
+  Sensor *sensors;
+  int max_sensors, max_alerts;
+} Mem_struct;
+
 int shmid;
 Mem_struct * mem;
-sem_t * shared_memory_sem;
+sem_t BLOCK_SHM;
 
 /* Signal Actions */
 struct sigaction act; // main
@@ -54,12 +60,12 @@ int needQuit(pthread_mutex_t * mutex) {
 void write_log(FILE *fp, char * content) {
   pthread_mutex_lock(&log_mutex);
   sem_wait(&process_log);
-  char hour[7], buffer[MAX];
-  get_hour(hour);
-  sprintf(buffer, "%s %s", hour, content);
+  char buffer[MAX], *time_buff = get_hour();
+  sprintf(buffer, "%s %s", time_buff, content);
   fprintf(fp, "%s\n", buffer);
   fflush(fp);
   printf("%s\n", buffer);
+  free(time_buff);
   sem_post(&process_log);
   pthread_mutex_unlock(&log_mutex);
 }
@@ -101,7 +107,9 @@ void alert_watcher() {
 
 void * sensor_reader_func(void * param) {
   write_log(fp, "THREAD SENSOR_READER CREATED");
+  sem_wait(&BLOCK_SHM);
   mem->sens = 1;
+  sem_post(&BLOCK_SHM);
 
   // Do your thing
   while(needQuit(&kill_mutex)) {
@@ -113,7 +121,9 @@ void * sensor_reader_func(void * param) {
 
 void * console_reader_func(void * param) {
   write_log(fp, "THREAD CONSOLE_READER CREATED");
+  sem_wait(&BLOCK_SHM);
   mem->cons = 1;
+  sem_post(&BLOCK_SHM);
 
   // Do your thing
   while(needQuit(&kill_mutex)) {
@@ -123,15 +133,18 @@ void * console_reader_func(void * param) {
   pthread_exit(NULL);
 }
 
-
 void * dispatcher_func(void * param) {
   write_log(fp, "THREAD DISPATCHER CREATED");
+  sem_wait(&BLOCK_SHM);
   mem->disp = 1;
+  sem_post(&BLOCK_SHM);
 
   // Do your thing
   while (needQuit(&kill_mutex)) {
+    sem_wait(&semaphore);
     if (available_workers > 0) { // check if there is a worker available
-      
+      // send job to worker
+      sem_post(&semaphore);
     }
   }
   pthread_exit(NULL);
@@ -152,8 +165,7 @@ void cleanup() {
   sem_destroy(&semaphore);
   sem_destroy(&process_log);
   sem_destroy(&BLOCK_WORKER);
-  sem_close(shared_memory_sem);
-  sem_unlink(SEM_FILE);
+  sem_destroy(&BLOCK_SHM);
 
   /* Remove Threads */
   pthread_mutex_unlock(&kill_mutex);
@@ -183,6 +195,16 @@ void sigint_handler(int sig) {
     write_log(fp, "SIGINT RECEIVED");
     cleanup();
     exit(0);
+  }
+}
+
+void sigtstp_handler(int sig) {
+  printf("\n");
+  if (sig == SIGTSTP) {
+    write_log(fp, "SIGTSTP RECEIVED");
+    #ifdef DEBUG
+      printf("DEBUG >> %d workers available 🧌\n", available_workers);
+    #endif
   }
 }
 
@@ -246,8 +268,8 @@ int main(int argc, char **argv) {
     exit(0);
   }
 
-  if ((shared_memory_sem = sem_open(SEM_FILE, O_CREAT, 0666, 1)) == SEM_FAILED) {
-    printf("ERROR >> CREATING SHARED MEMORY SEMAPHORE\n");
+  if ((sem_init(&BLOCK_SHM, 0, 1)) != 0) {
+    printf("ERROR >> CREATING BLOCK_SHM SEMAPHORE\n");
     exit(0);
   }
 
@@ -260,7 +282,7 @@ int main(int argc, char **argv) {
   }
 
 	/* Shared Memory */
-	if ((shmid = shmget(SHM_KEY, sizeof(Mem_struct*), 0666 | IPC_CREAT | IPC_EXCL)) == -1) {
+	if ((shmid = shmget(IPC_PRIVATE, sizeof(Mem_struct*), 0666 | IPC_CREAT | IPC_EXCL)) == -1) {
     printf("ERROR >> CREATING SHARED MEMORY\n");
     exit(0);
 	}
@@ -274,14 +296,15 @@ int main(int argc, char **argv) {
 		exit(0);
 	}
 
+  sem_wait(&BLOCK_SHM);
   mem->cons = 0;
   mem->sens = 0;
   mem->disp = 0;
   mem->max_sensors = MAX_SENSORS;
   mem->max_alerts = MAX_ALERTS;
-  // mem->sensors = (Sensor *) malloc(MAX_SENSORS * sizeof(Sensor));
+  mem->sensors = (Sensor *) malloc(MAX_SENSORS * sizeof(Sensor));
   for (int i = 0; i < MAX_SENSORS; i++) mem->sensors[i] = NULL_SENSOR;
-
+  sem_post(&BLOCK_SHM);
 
   /* Sensor Reader */
   if (pthread_create(&sensor_reader, NULL, sensor_reader_func, NULL) != 0) {
@@ -318,6 +341,8 @@ int main(int argc, char **argv) {
   /* Re-enable signal */
   act.sa_handler = sigint_handler;
   sigaction(SIGINT, &act, NULL);
+  act.sa_handler = sigtstp_handler;
+  sigaction(SIGTSTP, &act, NULL);
 
-  pause(); // wait for SIGINT
+  while(1) pause(); // wait for SIGINT
 }
