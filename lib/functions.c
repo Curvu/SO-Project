@@ -38,10 +38,12 @@ void verifyParam(char *param, void *var, int type) {
   }
 }
 
-void get_hour(char * hour) {
-	time_t sec = time(NULL);
-	struct tm *t = localtime(&sec);
-  sprintf(hour, "%02d:%02d:%02d", t->tm_hour, t->tm_min, t->tm_sec);
+char *get_hour() {
+  char *hour = malloc(STR);
+  time_t t = time(NULL);
+  struct tm tm = *localtime(&t);
+  sprintf(hour, "%d:%d:%d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+  return hour;
 }
 
 int compareSensor(Sensor *s1, Sensor *s2) {

@@ -4,21 +4,11 @@
 #define DEBUG
 #define MAX 200
 #define STR 33
-#define SHM_KEY 0x2233
-#define SEM_FILE "semaphore"
 
 typedef struct {
   char id[STR], key[STR];
   int min, max, inter;
 } Sensor;
-
-/* Shared memory */
-typedef struct {
-  int sens, cons, disp;
-  // Sensor *sensors;
-  Sensor sensors[20];
-  int max_sensors, max_alerts;
-} Mem_struct;
 
 #define NULL_SENSOR (Sensor) { "", "", 0, 0, 0 }
 
@@ -45,10 +35,10 @@ int verifyKey(char *);
 void verifyParam(char *, void *, int);
 
 /**
- * @brief get hour:minute:second
- * @param char* hour
+ * @brief hour:minute:second
+ * @return string with hour
  */
-void get_hour(char *);
+char *get_hour();
 
 /**
  * @brief compare two sensors
