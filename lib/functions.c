@@ -43,3 +43,7 @@ void get_hour(char * hour) {
 	struct tm *t = localtime(&sec);
   sprintf(hour, "%02d:%02d:%02d", t->tm_hour, t->tm_min, t->tm_sec);
 }
+
+int compareSensor(Sensor *s1, Sensor *s2) {
+  return strcmp(s1->id, s2->id) == 0 && strcmp(s1->key, s2->key) == 0 && s1->min == s2->min && s1->max == s2->max && s1->inter == s2->inter;
+}
