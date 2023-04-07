@@ -10,7 +10,13 @@ typedef struct {
   int min, max, inter;
 } Sensor;
 
+typedef struct {
+  char id[STR], key[STR];
+  int min, max;
+} Alert;
+
 #define NULL_SENSOR (Sensor) { "", "", 0, 0, 0 }
+#define NULL_ALERT (Alert) { "", "", 0, 0 }
 
 /**
  * @brief verify if id is alfa-numeric
@@ -44,8 +50,16 @@ char *get_hour();
  * @brief compare two sensors
  * @param Sensor* s1
  * @param Sensor* s2
- * @return 1 if s1 is equal to s2, 0 otherwise
+ * @return 1 if s1 == s2, 0 otherwise
  */
-int compareSensor(Sensor *, Sensor *);
+int compareSensors(Sensor *, Sensor *);
+
+/**
+ * @brief compare two alerts
+ * @param Alert* a1
+ * @param Alert* a2
+ * @return 1 if a1 == a2, 0 otherwise
+ */
+int compareAlerts(Alert *, Alert *);
 
 #endif // FUNCTIONS_H
