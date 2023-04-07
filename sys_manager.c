@@ -211,7 +211,7 @@ void sigtstp_handler(int sig) {
 }
 
 int main(int argc, char **argv) {
-	if (argc != 2) {
+  if (argc != 2) {
     printf("INVALID NUMBER OF ARGUMENTS\n");
     exit(EXIT_FAILURE);
   }
@@ -289,22 +289,22 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
 
-	/* Shared Memory */
-	if ((shmid = shmget(IPC_PRIVATE, sizeof(Mem_struct*), 0666 | IPC_CREAT | IPC_EXCL)) == -1) {
+  /* Shared Memory */
+  if ((shmid = shmget(IPC_PRIVATE, sizeof(Mem_struct*), 0666 | IPC_CREAT | IPC_EXCL)) == -1) {
     write_log(fp, "ERROR >> CREATING SHARED MEMORY");
     cleanup();
     exit(EXIT_FAILURE);
-	}
+  }
 
   #ifdef DEBUG
     printf("DEBUG >> shmid = %d\n", shmid);
   #endif
 
-	if ((mem = (Mem_struct *) shmat(shmid, NULL, 0)) == (Mem_struct *) -1) {
+  if ((mem = (Mem_struct *) shmat(shmid, NULL, 0)) == (Mem_struct *) -1) {
     write_log(fp, "ERROR >> ATTACHING SHARED MEMORY");
     cleanup();
-		exit(EXIT_FAILURE);
-	}
+    exit(EXIT_FAILURE);
+  }
 
   sem_wait(&BLOCK_SHM);
   mem->cons = 0;
