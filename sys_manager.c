@@ -227,10 +227,10 @@ int main(int argc, char **argv) {
   if (cfg == NULL) {
     printf("ERROR >> OPENING CONFIG FILE\n");
     fclose(cfg);
-		exit(EXIT_FAILURE);
-	}
+    exit(EXIT_FAILURE);
+  }
 
-	/* Read Config */
+  /* Read Config */
   fscanf(cfg, "%d\n%d\n%d\n%d\n%d", &QUEUE_SZ, &N_WORKERS, &MAX_KEYS, &MAX_SENSORS, &MAX_ALERTS);
   if (QUEUE_SZ < 1 || N_WORKERS < 1 || MAX_KEYS < 1 || MAX_SENSORS < 1 || MAX_ALERTS < 0) {
     printf("ERROR >> IN CONFIG FILE\n");
