@@ -39,10 +39,10 @@ void verifyParam(char *param, void *var, int type) {
 }
 
 char * get_hour() {
-  char *hour = malloc(STR);
+  char *hour = malloc(9 * sizeof(char));
   time_t t = time(NULL);
   struct tm tm = *localtime(&t);
-  sprintf(hour, "%d:%d:%d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+  sprintf(hour, "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
   return hour;
 }
 
