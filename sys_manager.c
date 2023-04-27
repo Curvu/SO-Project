@@ -12,6 +12,8 @@
 #include <semaphore.h>
 #include <pthread.h>
 #include <errno.h>
+#include <sys/stat.h>
+#include <sys/select.h>
 #include "lib/functions.h"
 
 
@@ -28,10 +30,9 @@ FILE *fp;
 
 /* Shared memory */
 typedef struct {
-  int workers, available_workers, exit;
+  int workers, available_workers;
   Sensor *sensors;
   Alert *alerts;
-  int jobs; //! jobs to be done! (only for debugging)
 } Mem_struct;
 
 Mem_struct * shm;
@@ -42,14 +43,14 @@ struct sigaction act; // main
 
 /* Workers */
 sem_t *BLOCK_LOGGER, *BLOCK_WORKER, *BLOCK_SHM, *STILL_WORKING;
-pid_t * processes; 
+pid_t *processes; 
 
-/* Thread Sensor Reader, Console Reader, Dispatcher */
-pthread_t sensor_reader, console_reader, dispatcher;
+/* Thread Sensor Reader */
+pthread_t sensor_reader;
+int fd_sensor;
 
-/* Mutexes */
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; //! will be used in pipes
-
+/* Console Reader, Dispatcher */
+pthread_t console_reader, dispatcher;
 
 /* ----------------------------- */
 /*           Write Log           */
@@ -103,7 +104,6 @@ void worker(int num) {
     if (shm->available_workers == shm->workers) sem_post(STILL_WORKING); // is the last worker to finish
     sem_post(BLOCK_SHM);
   }
-  exit(0);
 }
 
 void alert_watcher() {
@@ -111,7 +111,6 @@ void alert_watcher() {
   // ve os alertas e o que foi gerado pelo sensor
   // envia mensagem
   while(1);
-  exit(0);
 }
 
 
@@ -120,50 +119,105 @@ void alert_watcher() {
 /* ----------------------------- */
 void * sensor_reader_func(void * param) {
   write_log(fp, "THREAD SENSOR_READER CREATED");
-  while(shm->exit == 0) {
-    // read from sensors
-    // send to dispatcher
+
+  // open pipe
+  if ((fd_sensor = open(SENSOR_FIFO, O_RDWR)) < 0) {
+    perror("open sensor fifo");
+    exit(EXIT_FAILURE);
   }
 
-  #ifdef DEBUG
-    printf("DEBUG >> Sensor Reader exiting!\n");
-  #endif
-  pthread_exit(NULL);
+  char buffer[MAX];
+  int size;
+  fd_set set;
+
+  while(1) {
+    FD_ZERO(&set);
+    FD_SET(fd_sensor, &set);
+    
+    if (select(fd_sensor + 1, &set, NULL, NULL, NULL) < 0) {
+      perror("select");
+      exit(EXIT_FAILURE);
+    }
+
+    if ((size = read(fd_sensor, buffer, MAX)) < 0) {
+      perror("read sensor fifo");
+      exit(EXIT_FAILURE);
+    }
+    buffer[size] = '\0';
+
+    #ifdef DEBUG
+      printf("DEBUG >> Sensor Reader read: %s\n", buffer);
+    #endif
+
+    if (buffer[0] == '>') { /* Register Sensor */
+      Sensor s;
+      sscanf(buffer, " >%[^#]#%[^#]#%d#%d#%d", s.id, s.key, &s.min, &s.max, &s.inter);
+      for (int i = 0; i < MAX_SENSORS; i++) {
+        if (compareSensors(&shm->sensors[i], &NULL_SENSOR)) {
+          cpySensor(&shm->sensors[i], &s);
+          #ifdef DEBUG
+            printf("DEBUG >> SENSOR CREATED: {%s, %s, %d, %d, %d}\n", shm->sensors[i].id, shm->sensors[i].key, shm->sensors[i].min, shm->sensors[i].max, shm->sensors[i].inter);
+          #endif
+          break;
+        }
+      }
+    } else if (buffer[0] == '<') { /* Unregister Sensor */
+      char id[STR], key[STR];
+      sscanf(buffer, " <%[^#]#%[^#]", id, key);
+      for (int i = 0; i < MAX_SENSORS; i++) {
+        if (checkSensor(&shm->sensors[i], id, key)) {
+          cpySensor(&shm->sensors[i], &NULL_SENSOR);
+          #ifdef DEBUG
+            printf("DEBUG >> SENSOR REMOVED: {%s, %s, %d, %d, %d}\n", shm->sensors[i].id, shm->sensors[i].key, shm->sensors[i].min, shm->sensors[i].max, shm->sensors[i].inter);
+          #endif
+          break;
+        }
+      }
+    } else { /* Send data to internal queue */
+      char id[STR], key[STR];
+      sscanf(buffer, " %[^#]#%[^#]#%*d", id, key);
+      int flag = 0;
+      for (int i = 0; i < MAX_SENSORS; i++) {
+        if (checkSensor(&shm->sensors[i], id, key)) {
+          flag = 1;
+          break;
+        }
+      }
+
+      if (flag) {
+        //! send to dispatcher (internal queue)
+        #ifdef DEBUG
+          printf("DEBUG >> Sending job to dispatcher! 😼\n");
+        #endif
+      }
+    }
+  }
 }
 
 void * console_reader_func(void * param) {
   write_log(fp, "THREAD CONSOLE_READER CREATED");
-  while(shm->exit == 0) {
+  while(1) {
     // read from console
     // send to dispatcher
   }
-  #ifdef DEBUG
-    printf("DEBUG >> Console Reader exiting!\n");
-  #endif
-  pthread_exit(NULL);
 }
 
 void * dispatcher_func(void * param) {
   write_log(fp, "THREAD DISPATCHER CREATED");
-  while (shm->exit == 0) {
+  while (1) {
     //! if receive job from sensor_reader or console_reader do your thing:
-    if (shm->jobs > 0) {
+    if (0) {
       if (shm->available_workers > 0) { // check if there is a worker available
-        shm->jobs--;
         //! send job to worker
         #ifdef DEBUG
           printf("DEBUG >> Sending job to worker!\n");
         #endif
 
         //* signal worker to start job
-        sem_post(BLOCK_WORKER);
+        sem_post(BLOCK_WORKER); // TODO: change to conditional variable
       }
     }
   }
-  #ifdef DEBUG
-    printf("DEBUG >> Dispatcher exiting!\n");
-  #endif
-  pthread_exit(NULL);
 }
 
 
@@ -172,7 +226,9 @@ void * dispatcher_func(void * param) {
 /* ----------------------------- */
 void cleanup() {
   /* Remove Threads */
-  shm->exit = 1;
+  pthread_kill(sensor_reader, SIGUSR1);
+  pthread_kill(console_reader, SIGUSR1);
+  pthread_kill(dispatcher, SIGUSR1);
   pthread_join(sensor_reader, NULL);
   pthread_join(console_reader, NULL);
   pthread_join(dispatcher, NULL);
@@ -183,16 +239,13 @@ void cleanup() {
     #ifdef DEBUG
       printf("DEBUG >> %d worker being deleted!\n", processes[i]);
     #endif
-    if (processes[i] > 0) kill(processes[i], SIGKILL); // TODO: check if process is still doing something
+    if (processes[i] > 0) kill(processes[i], SIGKILL);
   }
   for (int i = 0; i < N_WORKERS + 1; i++) wait(NULL);
 
   #ifdef DEBUG
     printf("DEBUG >> All threads and processes deleted!\n");
   #endif
-
-  /* Destroy mutex */
-  pthread_mutex_destroy(&mutex);
 
   /* Remove shared memory */
   if (shmid > 0) {
@@ -218,6 +271,9 @@ void cleanup() {
   sem_unlink(MUTEX_SHM);
   sem_close(STILL_WORKING);
   sem_unlink(MUTEX_STILL_WORKING);
+
+  /* Remove FIFO's */ //TODO: FINISH ME
+  unlink(SENSOR_FIFO);
 
   exit(0);
 }
@@ -260,16 +316,15 @@ void sigtstp_handler(int sig) { // ctrl + z
   }
 }
 
-void sigquit_handler(int sig) { // ctrl + backslash
-  printf("\n");
-  if (sig == SIGQUIT) {
-    sem_wait(BLOCK_SHM);
-    shm->jobs++;
-    sem_post(BLOCK_SHM);
-    printf("DEBUG >> Added 1 job to queue 🧵\n"); fflush(stdout);
+void sigusr1_handler(int sig) { // to close threads
+  if (sig == SIGUSR1) {
+    #ifdef DEBUG
+      printf("DEBUG >> SIGUSR1 RECEIVED!\n");
+    #endif
+    close(fd_sensor);
+    pthread_exit(NULL);
   }
 }
-
 
 /* ----------------------------- */
 /*             Main              */
@@ -287,45 +342,45 @@ int main(int argc, char **argv) {
   if (QUEUE_SZ < 1 || N_WORKERS < 1 || MAX_KEYS < 1 || MAX_SENSORS < 1 || MAX_ALERTS < 0) handle_error("INVALID CONFIG FILE");
   fclose(cfg);
 
-  /* Signal */
+  /* Signal (block all signals during setup) */
   act.sa_flags = 0;
-  // block all signals during setup
   sigfillset(&act.sa_mask);
   sigdelset(&act.sa_mask, SIGINT);
   sigdelset(&act.sa_mask, SIGTSTP);
-  #ifdef DEBUG
-    sigdelset(&act.sa_mask, SIGQUIT); // ctrl + backslash
-  #endif
+  sigdelset(&act.sa_mask, SIGUSR1);
   sigprocmask(SIG_SETMASK, &act.sa_mask, NULL); // this will block all signals
 
+  /* Signal Handlers - for now both are blocked */
   act.sa_handler = SIG_IGN;
   sigaction(SIGINT, &act, NULL);
   sigaction(SIGTSTP, &act, NULL);
-  #ifdef DEBUG
-    sigaction(SIGQUIT, &act, NULL); // ctrl + backslash
-  #endif
+  sigaction(SIGUSR1, &act, NULL); // to close threads
 
   /* Semaphores */
-  if ((BLOCK_SHM = sem_open(MUTEX_SHM, O_CREAT, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_SHM SEMAPHORE");          // block when someone is using the shared memory
-  if ((BLOCK_WORKER = sem_open(MUTEX_WORKER, O_CREAT, 0666, 0)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_WORKER SEMAPHORE"); // block workers when there are no jobs
-  if ((BLOCK_LOGGER = sem_open(MUTEX_LOGGER, O_CREAT, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_LOGGER SEMAPHORE"); // block when someone is using the log file
-  if ((STILL_WORKING = sem_open(MUTEX_STILL_WORKING, O_CREAT, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING STILL_WORKING SEMAPHORE"); // block when there are still workers working
+  if ((BLOCK_SHM = sem_open(MUTEX_SHM, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_SHM SEMAPHORE");          // block when someone is using the shared memory
+  if ((BLOCK_WORKER = sem_open(MUTEX_WORKER, O_CREAT | O_EXCL, 0666, 0)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_WORKER SEMAPHORE"); // block workers when there are no jobs
+  if ((BLOCK_LOGGER = sem_open(MUTEX_LOGGER, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_LOGGER SEMAPHORE"); // block when someone is using the log file
+  if ((STILL_WORKING = sem_open(MUTEX_STILL_WORKING, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING STILL_WORKING SEMAPHORE"); // block when there are still workers working
+
+  /* Create FIFO's */
+  if (mkfifo(SENSOR_FIFO, 0666) == -1) handle_error("CREATING SENSOR FIFO");
 
   /* Main */
   write_log(fp, "HOME_IOT SIMULATOR STARTING");
 
   /* Shared Memory */
-  if ((shmid = shmget(IPC_PRIVATE, sizeof(Mem_struct*), 0666 | IPC_CREAT | IPC_EXCL)) == -1) handle_error_log(fp, "ERROR >> CREATING SHARED MEMORY");
+  size_t mem_struct_size = sizeof(Mem_struct);
+  size_t sensors_size = MAX_SENSORS*sizeof(Sensor);
+  size_t alerts_size = MAX_ALERTS*sizeof(Alert);
+  if ((shmid = shmget(IPC_PRIVATE, mem_struct_size + sensors_size + alerts_size, 0666 | IPC_CREAT | IPC_EXCL)) == -1) handle_error_log(fp, "ERROR >> CREATING SHARED MEMORY");
   if ((shm = (Mem_struct *) shmat(shmid, NULL, 0)) == (Mem_struct *) -1) handle_error_log(fp, "ERROR >> ATTACHING SHARED MEMORY");
 
   /* Initialize Shared Memory */
   shm->workers = N_WORKERS;
   shm->available_workers = 0;
-  shm->exit = 0;
-  shm->jobs = 0; //! DEBUG -> delete me later
-  shm->sensors = (Sensor *) malloc(MAX_SENSORS * sizeof(Sensor));
+  shm->sensors = (Sensor *)((char *)shm + mem_struct_size); 
+  shm->alerts = (Alert *)((char *)shm + mem_struct_size + sensors_size);
   for (int i = 0; i < MAX_SENSORS; i++) shm->sensors[i] = NULL_SENSOR;
-  shm->alerts = (Alert *) malloc(MAX_ALERTS * sizeof(Alert));
   for (int i = 0; i < MAX_ALERTS; i++) shm->alerts[i] = NULL_ALERT;
 
   #ifdef DEBUG
@@ -347,15 +402,14 @@ int main(int argc, char **argv) {
     } else if (processes[i] < 0) handle_error_log(fp, "ERROR CREATING PROCESS");
   }
 
-  /* Re-enable signal */
+  /* Re-enable signals */
   act.sa_handler = sigint_handler;
   sigaction(SIGINT, &act, NULL);
   act.sa_handler = sigtstp_handler;
   sigaction(SIGTSTP, &act, NULL);
-  #ifdef DEBUG
-    act.sa_handler = &sigquit_handler;
-    sigaction(SIGQUIT, &act, NULL); // ctrl + backslash
-  #endif
+  /* Signal for threads */
+  act.sa_handler = sigusr1_handler;
+  sigaction(SIGUSR1, &act, NULL);
 
   while(1) pause(); // wait for SIGINT
 }
