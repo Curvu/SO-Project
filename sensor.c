@@ -4,13 +4,29 @@
 #include <time.h>
 #include <unistd.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <sys/types.h>
 #include "lib/functions.h"
 
-int count = 0;
+Sensor sensor;
+int value, count = 0;
+int fifo;
+char buffer[MAX];
 
 struct sigaction act;
 
-void cleanup() {}
+void cleanup() {
+  /* Send message to server to remove sensor */
+  sprintf(buffer, "<%s#%s", sensor.id, sensor.key);
+  if (write(fifo, buffer, strlen(buffer)) == -1) {
+    perror("Error writing to FIFO");
+    exit(EXIT_FAILURE);
+  }
+
+  /* Close FIFO */
+  close(fifo);
+  exit(EXIT_SUCCESS);
+}
 
 void ctrlz_handler(int signo) {
   printf("\n>> Messages sent so far: %d\n", count);
@@ -32,12 +48,18 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
     printf("Starting sensor!\n");
   #endif
 
-  Sensor sensor;
   verifyParam(argv[1], sensor.id, 0);
   verifyParam(argv[2], &sensor.inter, 1);
   verifyParam(argv[3], sensor.key, 0);
   verifyParam(argv[4], &sensor.min, 1);
   verifyParam(argv[5], &sensor.max, 1);
+
+  if (sensor.min >= sensor.max) {
+    printf("The minimum value must be less than the maximum value!\n");
+    exit(EXIT_FAILURE);
+  }
+
+  srand(time(NULL));
 
   /* Signals */
   act.sa_flags = 0;
@@ -47,20 +69,39 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
   act.sa_handler = ctrlc_handler;
   sigaction(SIGINT, &act, NULL);
 
-  srand(time(NULL));
-  int value;
+  /* Open FIFO */
+  if ((fifo = open(SENSOR_FIFO, O_WRONLY)) == -1) {
+    perror("Error opening FIFO");
+    exit(EXIT_FAILURE);
+  }
 
-  int init = time(NULL);
+  /* Register FIFO */
+  sprintf(buffer, ">%s#%s#%d#%d#%d", sensor.id, sensor.key, sensor.min, sensor.max, sensor.inter);
+  if (write(fifo, buffer, strlen(buffer)) == -1) {
+    perror("Error registering sensor");
+    exit(EXIT_FAILURE);
+  }
+
+  /* Send Data */
+  struct timespec req, remaining;
+  req.tv_sec = sensor.inter;
+  req.tv_nsec = 0;
   while(1) {
-    if (time(NULL) - init >= sensor.inter) { // if time passed is equal or greater than interval
-      init = time(NULL);
+    if (nanosleep(&req, &remaining) == -1) req = remaining;
+    else {
       value = (rand() % (sensor.max - sensor.min + 1)) + sensor.min;
-      
+      sprintf(buffer, "%s#%s#%d", sensor.id, sensor.key, value); // ID_sensor#Key#Value
       #ifdef DEBUG
-        printf("%s#%s#%d\n", sensor.id, sensor.key, value); // ID_sensor#Key#Value
+        printf("%s\n", buffer);
       #endif
 
+      if (write(fifo, buffer, strlen(buffer)) == -1) {
+        perror("Error writing to FIFO");
+        exit(EXIT_FAILURE);
+      }
+
       count++;
+      req.tv_sec = sensor.inter; // reset the sleep time
     }
   }
 
