@@ -18,6 +18,9 @@ typedef struct {
 #define NULL_SENSOR (Sensor) { "", "", 0, 0, 0 }
 #define NULL_ALERT (Alert) { "", "", 0, 0 }
 
+#define SENSOR_FIFO "sensor_fifo"
+#define USER_FIFO "user_fifo"
+
 /**
  * @brief verify if id is alfa-numeric
  * @param id
@@ -53,6 +56,23 @@ char *get_hour();
  * @return 1 if s1 == s2, 0 otherwise
  */
 int compareSensors(Sensor *, Sensor *);
+
+/**
+ * @brief check if sensor has the same id and key
+ * @param Sensor* s
+ * @param char* id
+ * @param char* key
+ * @return 1 if it's the same 0 otherwise
+ */
+
+int checkSensor(Sensor *, char *, char *);
+
+/**
+ * @brief copy a s2 to s1 
+ * @param Sensor* s1
+ * @param Sensor* s2
+ */
+void cpySensor(Sensor *, Sensor *);
 
 /**
  * @brief compare two alerts

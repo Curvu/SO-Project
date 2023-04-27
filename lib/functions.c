@@ -50,6 +50,18 @@ int compareSensors(Sensor *s1, Sensor *s2) {
   return (strcmp(s1->id, s2->id) == 0) && (strcmp(s1->key, s2->key) == 0) && (s1->min == s2->min) && (s1->max == s2->max) && (s1->inter == s2->inter);
 }
 
+int checkSensor(Sensor *s, char *key, char *id) {
+  return (strcmp(s->id, id) == 0) && (strcmp(s->key, key) == 0);
+}
+
+void cpySensor(Sensor *s1, Sensor *s2) {
+  strcpy(s1->id, s2->id);
+  strcpy(s1->key, s2->key);
+  s1->min = s2->min;
+  s1->max = s2->max;
+  s1->inter = s2->inter;
+}
+
 int compareAlerts(Alert *a1, Alert *a2) {
   return (strcmp(a1->id, a2->id) == 0) && (strcmp(a1->key, a2->key) == 0) && (a1->min == a2->min) && (a1->max == a2->max);
 }
