@@ -8,9 +8,9 @@ OBJS = $(SRCS:%.c=$(OUTPUT_DIR)/%.o) $(OUTPUT_DIR)/functions.o $(OUTPUT_DIR)/sys
 
 # Targets
 .PHONY: all clean
+.PRECIOUS: $(OUTPUT_DIR)/%.o # Don't remove .o files automatically
 
 all: $(OUTPUT_DIR) $(SRCS:%.c=$(OUTPUT_DIR)/%) $(OUTPUT_DIR)/home_iot
-	@rm -f $(OBJS)
 	@clear
 	@echo "\033[1;32mBuild Complete\033[0m"
 
