@@ -49,8 +49,13 @@ pid_t *processes;
 pthread_t sensor_reader;
 int fd_sensor;
 
-/* Console Reader, Dispatcher */
-pthread_t console_reader, dispatcher;
+/* Thread Console Reader */
+pthread_t console_reader;
+int fd_user;
+
+/* Thread Dispatcher */
+pthread_t dispatcher;
+
 
 /* ----------------------------- */
 /*           Write Log           */
@@ -64,6 +69,80 @@ void write_log(FILE *fp, char * content) {
   printf("%s\n", buffer);
   free(time_buff);
   sem_post(BLOCK_LOGGER);
+}
+
+
+/* ----------------------------- */
+/*            Cleanup            */
+/* ----------------------------- */
+void cleanup() {
+  /* Remove Threads */
+  pthread_kill(sensor_reader, SIGUSR1);
+  pthread_kill(console_reader, SIGUSR1);
+  pthread_kill(dispatcher, SIGUSR1);
+  pthread_join(sensor_reader, NULL);
+  pthread_join(console_reader, NULL);
+  pthread_join(dispatcher, NULL);
+
+  /* Kill all processes */
+  sem_wait(STILL_WORKING); // wait for all workers to finish their job
+  for (int i = 0; i < N_WORKERS + 1; i++) {
+    #ifdef DEBUG
+      printf("DEBUG >> %d worker being deleted!\n", processes[i]);
+    #endif
+    if (processes[i] > 0) kill(processes[i], SIGKILL);
+  }
+  for (int i = 0; i < N_WORKERS + 1; i++) wait(NULL);
+
+  #ifdef DEBUG
+    printf("DEBUG >> All threads and processes deleted!\n");
+  #endif
+
+  /* Remove shared memory */
+  if (shmid > 0) {
+    shmctl(shmid, IPC_RMID, NULL); // remove the shared memory
+    shmdt(shm); // dettach from the shared memory
+  }
+
+  /* Free memory */
+  free(processes);
+
+  /* Close log file */
+  if (fp) {
+    write_log(fp, "HOME_IOT SIMULATOR CLOSING");
+    fclose(fp);
+  }
+
+  /* Remove Semaphores */
+  sem_close(BLOCK_WORKER);
+  sem_unlink(MUTEX_WORKER);
+  sem_close(BLOCK_LOGGER);
+  sem_unlink(MUTEX_LOGGER);
+  sem_close(BLOCK_SHM);
+  sem_unlink(MUTEX_SHM);
+  sem_close(STILL_WORKING);
+  sem_unlink(MUTEX_STILL_WORKING);
+
+  /* Remove FIFO's */ //TODO: FINISH ME
+  unlink(SENSOR_FIFO);
+  unlink(USER_FIFO);
+
+  exit(0);
+}
+
+
+/* ----------------------------- */
+/*         Error Handlers        */
+/* ----------------------------- */
+void handle_error(char * content) {
+  printf("ERROR >> %s\n", content);
+  exit(EXIT_FAILURE);
+}
+
+void handle_error_log(FILE *fp, char * content) {
+  write_log(fp, content);
+  cleanup();
+  exit(EXIT_FAILURE);
 }
 
 
@@ -121,10 +200,7 @@ void * sensor_reader_func(void * param) {
   write_log(fp, "THREAD SENSOR_READER CREATED");
 
   // open pipe
-  if ((fd_sensor = open(SENSOR_FIFO, O_RDWR)) < 0) {
-    perror("open sensor fifo");
-    exit(EXIT_FAILURE);
-  }
+  if ((fd_sensor = open(SENSOR_FIFO, O_RDWR)) < 0) handle_error_log(fp, "open sensor fifo");
 
   char buffer[MAX];
   int size;
@@ -134,15 +210,8 @@ void * sensor_reader_func(void * param) {
     FD_ZERO(&set);
     FD_SET(fd_sensor, &set);
     
-    if (select(fd_sensor + 1, &set, NULL, NULL, NULL) < 0) {
-      perror("select");
-      exit(EXIT_FAILURE);
-    }
-
-    if ((size = read(fd_sensor, buffer, MAX)) < 0) {
-      perror("read sensor fifo");
-      exit(EXIT_FAILURE);
-    }
+    if (select(fd_sensor + 1, &set, NULL, NULL, NULL) < 0) handle_error_log(fp, "select sensor fifo");
+    if ((size = read(fd_sensor, buffer, MAX)) < 0) handle_error_log(fp, "read sensor fifo");
     buffer[size] = '\0';
 
     #ifdef DEBUG
@@ -196,9 +265,36 @@ void * sensor_reader_func(void * param) {
 
 void * console_reader_func(void * param) {
   write_log(fp, "THREAD CONSOLE_READER CREATED");
+
+  // open pipe
+  if ((fd_user = open(USER_FIFO, O_RDWR)) < 0) handle_error_log(fp, "open user fifo");
+
+  Message msg;
+  int size;
+  fd_set set;
+
   while(1) {
-    // read from console
-    // send to dispatcher
+    FD_ZERO(&set);
+    FD_SET(fd_user, &set);
+
+    if (select(fd_user + 1, &set, NULL, NULL, NULL) < 0) handle_error_log(fp, "select user fifo");
+    if ((size = read(fd_user, &msg, sizeof(Message))) < 0) handle_error_log(fp, "read user fifo");
+    
+    if (msg.command == 1) { // add alert
+      for (int i = 0; i < MAX_ALERTS; i++) {
+        
+      }
+    } else if (msg.command == 2) { // remove alert
+
+    } else if (msg.command == 3) { // list alerts
+
+    } else if (msg.command == 4) { // sensors
+
+    } else if (msg.command == 5) { // stats 
+
+    } else if (msg.command == 6) { // reset
+
+    }
   }
 }
 
@@ -218,79 +314,6 @@ void * dispatcher_func(void * param) {
       }
     }
   }
-}
-
-
-/* ----------------------------- */
-/*            Cleanup            */
-/* ----------------------------- */
-void cleanup() {
-  /* Remove Threads */
-  pthread_kill(sensor_reader, SIGUSR1);
-  pthread_kill(console_reader, SIGUSR1);
-  pthread_kill(dispatcher, SIGUSR1);
-  pthread_join(sensor_reader, NULL);
-  pthread_join(console_reader, NULL);
-  pthread_join(dispatcher, NULL);
-
-  /* Kill all processes */
-  sem_wait(STILL_WORKING); // wait for all workers to finish their job
-  for (int i = 0; i < N_WORKERS + 1; i++) {
-    #ifdef DEBUG
-      printf("DEBUG >> %d worker being deleted!\n", processes[i]);
-    #endif
-    if (processes[i] > 0) kill(processes[i], SIGKILL);
-  }
-  for (int i = 0; i < N_WORKERS + 1; i++) wait(NULL);
-
-  #ifdef DEBUG
-    printf("DEBUG >> All threads and processes deleted!\n");
-  #endif
-
-  /* Remove shared memory */
-  if (shmid > 0) {
-    shmctl(shmid, IPC_RMID, NULL); // remove the shared memory
-    shmdt(shm); // dettach from the shared memory
-  }
-
-  /* Free memory */
-  free(processes);
-
-  /* Close log file */
-  if (fp) {
-    write_log(fp, "HOME_IOT SIMULATOR CLOSING");
-    fclose(fp);
-  }
-
-  /* Remove Semaphores */
-  sem_close(BLOCK_WORKER);
-  sem_unlink(MUTEX_WORKER);
-  sem_close(BLOCK_LOGGER);
-  sem_unlink(MUTEX_LOGGER);
-  sem_close(BLOCK_SHM);
-  sem_unlink(MUTEX_SHM);
-  sem_close(STILL_WORKING);
-  sem_unlink(MUTEX_STILL_WORKING);
-
-  /* Remove FIFO's */ //TODO: FINISH ME
-  unlink(SENSOR_FIFO);
-
-  exit(0);
-}
-
-
-/* ----------------------------- */
-/*         Error Handlers        */
-/* ----------------------------- */
-void handle_error(char * content) {
-  printf("ERROR >> %s\n", content);
-  exit(EXIT_FAILURE);
-}
-
-void handle_error_log(FILE *fp, char * content) {
-  write_log(fp, content);
-  cleanup();
-  exit(EXIT_FAILURE);
 }
 
 
@@ -318,10 +341,8 @@ void sigtstp_handler(int sig) { // ctrl + z
 
 void sigusr1_handler(int sig) { // to close threads
   if (sig == SIGUSR1) {
-    #ifdef DEBUG
-      printf("DEBUG >> SIGUSR1 RECEIVED!\n");
-    #endif
     close(fd_sensor);
+    close(fd_user);
     pthread_exit(NULL);
   }
 }
@@ -364,6 +385,7 @@ int main(int argc, char **argv) {
 
   /* Create FIFO's */
   if (mkfifo(SENSOR_FIFO, 0666) == -1) handle_error("CREATING SENSOR FIFO");
+  if (mkfifo(USER_FIFO, 0666) == -1) handle_error("CREATING USER FIFO");
 
   /* Main */
   write_log(fp, "HOME_IOT SIMULATOR STARTING");
@@ -378,8 +400,8 @@ int main(int argc, char **argv) {
   /* Initialize Shared Memory */
   shm->workers = N_WORKERS;
   shm->available_workers = 0;
-  shm->sensors = (Sensor *)((char *)shm + mem_struct_size); 
-  shm->alerts = (Alert *)((char *)shm + mem_struct_size + sensors_size);
+  shm->sensors = (Sensor *)((void *)shm + mem_struct_size); 
+  shm->alerts = (Alert *)((void *)shm + mem_struct_size + sensors_size);
   for (int i = 0; i < MAX_SENSORS; i++) shm->sensors[i] = NULL_SENSOR;
   for (int i = 0; i < MAX_ALERTS; i++) shm->alerts[i] = NULL_ALERT;
 
