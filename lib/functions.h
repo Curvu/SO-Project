@@ -15,6 +15,12 @@ typedef struct {
   int min, max;
 } Alert;
 
+typedef struct {
+  int user;
+  int command;
+  Alert alert;
+} Message;
+
 #define NULL_SENSOR (Sensor) { "", "", 0, 0, 0 }
 #define NULL_ALERT (Alert) { "", "", 0, 0 }
 
