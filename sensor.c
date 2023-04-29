@@ -16,16 +16,9 @@ char buffer[MAX];
 struct sigaction act;
 
 void cleanup() {
-  /* Send message to server to remove sensor */
-  sprintf(buffer, "<%s#%s", sensor.id, sensor.key);
-  if (write(fifo, buffer, strlen(buffer)) == -1) {
-    perror("Error writing to FIFO");
-    exit(EXIT_FAILURE);
-  }
-
   /* Close FIFO */
   close(fifo);
-  exit(EXIT_SUCCESS);
+  exit(0);
 }
 
 void ctrlz_handler(int signo) {
@@ -79,6 +72,7 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
   sprintf(buffer, ">%s#%s#%d#%d#%d", sensor.id, sensor.key, sensor.min, sensor.max, sensor.inter);
   if (write(fifo, buffer, strlen(buffer)) == -1) {
     perror("Error registering sensor");
+    close(fifo);
     exit(EXIT_FAILURE);
   }
 
@@ -97,6 +91,7 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
 
       if (write(fifo, buffer, strlen(buffer)) == -1) {
         perror("Error writing to FIFO");
+        close(fifo);
         exit(EXIT_FAILURE);
       }
 
