@@ -3,7 +3,7 @@
 
 #define DEBUG
 
-#define MESSAGE_QUEUE 123456789
+#define MESSAGE_QUEUE_KEY 13579
 
 #define BUFFER 2048
 #define MAX 200
@@ -113,14 +113,6 @@ int searchSensor(Sensor**, Sensor*, int, int);
  * @return 1 if a1 == a2, 0 otherwise
  */
 int compareAlerts(Alert *, Alert *);
-
-/**
- * @brief check if sensor has the same id
- * @param Sensor* s
- * @param char* id
- * @return 1 if it's the same 0 otherwise
- */
-int checkAlert(Alert *, char *);
 
 /**
  * @brief copy a2 to a1 
