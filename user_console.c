@@ -5,22 +5,27 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/msg.h>
 #include "lib/functions.h"
 
 struct sigaction act;
-int fifo;
+int fifo, mqid;
 char buffer[MAX];
 
 void cleanup() {
   /* Close FIFO */
   close(fifo);
+
+  /* Exit */
   exit(0);
 }
 
 void ctrlc_handler(int signo) {
-  printf("\nSIGINT RECEIVED\n");
-  cleanup();
-  exit(0);
+  if (signo == SIGINT) {
+    printf("\nSIGINT RECEIVED\n");
+    cleanup();
+    exit(0);
+  }
 }
 
 int main(int argc, char **argv) {
@@ -58,7 +63,14 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
 
+  /* Open Message Queue */
+  if ((mqid = msgget(MESSAGE_QUEUE_KEY, 0)) == -1) {
+    perror("Error opening Message Queue");
+    exit(EXIT_FAILURE);
+  }
+
   /* Main */
+  Message msg;
   char command[MAX];
   int val;
   while(1) {
@@ -84,9 +96,9 @@ int main(int argc, char **argv) {
     else if (strcmp(command, "stats") == 0) cmd.command = 5;
     else if (strcmp(command, "reset") == 0) cmd.command = 6;
     else if (strcmp(command, "exit") == 0) {
-      printf("> Bye bye!\n");
+      printf(">> Bye bye!\n");
       break;
-    } else printf("> Invalid command\n");
+    } else printf(">> Invalid command\n");
     if (cmd.command > 0) {
       cmd.alert.user = user_id;
       if (write(fifo, &cmd, sizeof(Command)) == -1) {
@@ -95,6 +107,12 @@ int main(int argc, char **argv) {
       }
       cmd.command = 0;
       cpyAlert(&cmd.alert, &NULL_ALERT);
+      if (msgrcv(mqid, &msg, sizeof(Message) - sizeof(long), user_id, 0) == -1) { //!!! WHAT IF THERE WAS NO SPACE IN THE QUEUE???
+        perror("Error reading from Message Queue");
+        cleanup();
+        exit(EXIT_FAILURE);
+      }
+      printf("%s", msg.response);
     }
   }
 
