@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
 
   int user_id;
   verifyParam(argv[1], &user_id, 1);
-  if (user_id < 0) {
+  if (user_id <= 0) {
     printf("User id must be greater than 0!\n");
     exit(EXIT_FAILURE);
   }
@@ -42,9 +42,9 @@ int main(int argc, char **argv) {
     printf("Hello, user %d!\n", user_id);
   #endif
 
-  Message msg;
-  msg.user = user_id;
-  msg.command = 0;
+  Command cmd;
+  cmd.user = user_id;
+  cmd.command = 0;
 
   /* Signal Handler */
   act.sa_flags = 0;
@@ -60,31 +60,41 @@ int main(int argc, char **argv) {
 
   /* Main */
   char command[MAX];
+  int val;
   while(1) {
     scanf(" %s", command);
     if (strcmp(command, "add_alert") == 0) { // <id> <key> <min> <max>
-      scanf(" %[^ ] %[^ ] %d %d", msg.alert.id, msg.alert.key, &msg.alert.min, &msg.alert.max);
-      if ((verifyID(msg.alert.id) && verifyKey(msg.alert.key))) msg.command = 1;
+      val = scanf(" %[^ ] %[^ ] %d %d", cmd.alert.id, cmd.alert.key, &cmd.alert.min, &cmd.alert.max);
+      if (val == 0 || val == EOF) {
+        printf(">> Invalid command!\n");
+        continue;
+      }
+      if (verifyID(cmd.alert.id) && verifyKey(cmd.alert.key)) cmd.command = 1;
       else printf(">> Some invalid Parameter!!\n");
     } else if (strcmp(command, "remove_alert") == 0) { // <id>
-      scanf(" %[^ ]", msg.alert.id);
-      if (verifyID(msg.alert.id)) msg.command = 2;
+      val = scanf(" %[^ ]", cmd.alert.id);
+      if (val == 0 || val == EOF) {
+        printf(">> Invalid command!\n");
+        continue;
+      }
+      if (verifyID(cmd.alert.id)) cmd.command = 2;
       else printf(">> Invalid ID!!\n");
-    } else if (strcmp(command, "list_alerts") == 0) msg.command = 3;
-    else if (strcmp(command, "sensors") == 0) msg.command = 4;
-    else if (strcmp(command, "stats") == 0) msg.command = 5;
-    else if (strcmp(command, "reset") == 0) msg.command = 6;
+    } else if (strcmp(command, "list_alerts") == 0) cmd.command = 3;
+    else if (strcmp(command, "sensors") == 0) cmd.command = 4;
+    else if (strcmp(command, "stats") == 0) cmd.command = 5;
+    else if (strcmp(command, "reset") == 0) cmd.command = 6;
     else if (strcmp(command, "exit") == 0) {
       printf("> Bye bye!\n");
       break;
     } else printf("> Invalid command\n");
-    if (msg.command > 0) {
-      printf("%d\n", msg.user);
-      if (write(fifo, &msg, sizeof(Message)) == -1) {
+    if (cmd.command > 0) {
+      cmd.alert.user = user_id;
+      if (write(fifo, &cmd, sizeof(Command)) == -1) {
         perror("Error writing to FIFO");
         exit(EXIT_FAILURE);
       }
-      msg.command = 0;
+      cmd.command = 0;
+      cpyAlert(&cmd.alert, &NULL_ALERT);
     }
   }
 
