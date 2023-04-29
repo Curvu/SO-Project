@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#include <sys/msg.h>
 #include "lib/functions.h"
 
 
@@ -25,14 +26,16 @@
 #define MUTEX_WORKER "/mutex_worker"
 #define MUTEX_LOGGER "/mutex_logger"
 #define MUTEX_STILL_WORKING "/mutex_still_working"
+#define MUTEX_QUEUE "/mutex_queue"
 int QUEUE_SZ, N_WORKERS, MAX_KEYS, MAX_SENSORS, MAX_ALERTS;
 FILE *fp;
 
-/* Shared memory */
+/* Shared Memory */
 typedef struct {
   int workers, available_workers;
   Sensor *sensors;
   Alert *alerts;
+  Stat *stats;
 } Mem_struct;
 
 Mem_struct * shm;
@@ -42,7 +45,7 @@ int shmid;
 struct sigaction act; // main
 
 /* Workers */
-sem_t *BLOCK_LOGGER, *BLOCK_WORKER, *BLOCK_SHM, *STILL_WORKING;
+sem_t *BLOCK_LOGGER, *BLOCK_WORKER, *BLOCK_SHM, *STILL_WORKING, *BLOCK_QUEUE;
 pid_t *processes; 
 
 /* Thread Sensor Reader */
@@ -56,6 +59,26 @@ int fd_user;
 /* Thread Dispatcher */
 pthread_t dispatcher;
 
+/* Internal Queue */
+typedef struct {
+  int type; // 0 is from sensor and 1 from user 
+  char content[MAX];
+  Command cmd;
+} Job;
+
+typedef struct Jobs {
+  Job job;
+  struct Jobs * next;
+} Jobs;
+
+typedef struct {
+  int n; // current number of elements
+  Jobs *user; // User Console Thread
+  Jobs *sensor; // Sensor Reader Thread
+} InternalQueue;
+
+InternalQueue * queue;
+int mqid; // message queue id
 
 /* ----------------------------- */
 /*           Write Log           */
@@ -122,11 +145,17 @@ void cleanup() {
   sem_unlink(MUTEX_SHM);
   sem_close(STILL_WORKING);
   sem_unlink(MUTEX_STILL_WORKING);
+  sem_close(BLOCK_QUEUE);
+  sem_unlink(MUTEX_QUEUE);
 
-  /* Remove FIFO's */ //TODO: FINISH ME
+  /* Remove FIFO's */
   unlink(SENSOR_FIFO);
   unlink(USER_FIFO);
 
+  /* Remove Message Queue */
+  msgctl(mqid, IPC_RMID, NULL);
+
+  /* Exit */
   exit(0);
 }
 
@@ -140,7 +169,9 @@ void handle_error(char * content) {
 }
 
 void handle_error_log(FILE *fp, char * content) {
-  write_log(fp, content);
+  char send[] = "ERROR >> ";
+  strcat(send, content);
+  write_log(fp, send);
   cleanup();
   exit(EXIT_FAILURE);
 }
@@ -157,6 +188,7 @@ void worker(int num) {
   shm->available_workers++;
   sem_post(BLOCK_SHM);
 
+  Job job;
   while(1) {
     // Worker is ready to receive job
     write_log(fp, buffer);
@@ -171,11 +203,13 @@ void worker(int num) {
     sem_post(BLOCK_SHM);
 
     //! Do your thing here
-    #ifdef DEBUG
-      printf("DEBUG >> Worker %d doing job!\n", num); fflush(stdout);
-      srand(time(NULL));
-      sleep(rand() % 5);
-    #endif
+    if (job.type == 0) {
+      // from sensor
+      // do something
+    } else {
+      // from user
+      // do something
+    }
 
     //* finish job
     sem_wait(BLOCK_SHM);
@@ -194,6 +228,34 @@ void alert_watcher() {
 
 
 /* ----------------------------- */
+/*        Queue Functions        */
+/* ----------------------------- */
+void create_job(Jobs* jobs, Job job) {
+  Jobs *new = malloc(sizeof(Jobs));
+  if (new == NULL) handle_error_log(fp, "CREATING NEW JOB");
+  new->job = job;
+
+  if (jobs->next == NULL) { // empty list - add to the beginning
+    jobs->next = new;
+    new->next = NULL;
+  } else { // non-empty list - add to the end
+    Jobs *aux = jobs->next;
+    while(aux->next != NULL) aux = aux->next;
+    aux->next = new;
+    new->next = NULL;
+  }
+  queue->n++;
+}
+
+Job * pop_job(Jobs* jobs) { // get first job and remove it from the queue
+  if (jobs->next == NULL) return NULL; // empty list
+  Jobs *aux = jobs->next;
+  jobs->next = aux->next;
+  queue->n--;
+  return &(aux->job);
+}
+
+/* ----------------------------- */
 /*        Thread Functions       */
 /* ----------------------------- */
 void * sensor_reader_func(void * param) {
@@ -202,64 +264,66 @@ void * sensor_reader_func(void * param) {
   // open pipe
   if ((fd_sensor = open(SENSOR_FIFO, O_RDWR)) < 0) handle_error_log(fp, "open sensor fifo");
 
-  char buffer[MAX];
   int size;
-  fd_set set;
+  Job job;
+  job.type = 0;
 
+  fd_set set;
   while(1) {
     FD_ZERO(&set);
     FD_SET(fd_sensor, &set);
-    
+
     if (select(fd_sensor + 1, &set, NULL, NULL, NULL) < 0) handle_error_log(fp, "select sensor fifo");
-    if ((size = read(fd_sensor, buffer, MAX)) < 0) handle_error_log(fp, "read sensor fifo");
-    buffer[size] = '\0';
+    if ((size = read(fd_sensor, job.content, MAX)) < 0) handle_error_log(fp, "read sensor fifo");
+    job.content[size] = '\0';
 
     #ifdef DEBUG
-      printf("DEBUG >> Sensor Reader read: %s\n", buffer);
+      printf("DEBUG >> Sensor Reader read: %s\n", job.content);
     #endif
 
-    if (buffer[0] == '>') { /* Register Sensor */
-      Sensor s;
-      sscanf(buffer, " >%[^#]#%[^#]#%d#%d#%d", s.id, s.key, &s.min, &s.max, &s.inter);
-      for (int i = 0; i < MAX_SENSORS; i++) {
-        if (compareSensors(&shm->sensors[i], &NULL_SENSOR)) {
-          cpySensor(&shm->sensors[i], &s);
-          #ifdef DEBUG
-            printf("DEBUG >> SENSOR CREATED: {%s, %s, %d, %d, %d}\n", shm->sensors[i].id, shm->sensors[i].key, shm->sensors[i].min, shm->sensors[i].max, shm->sensors[i].inter);
-          #endif
-          break;
-        }
-      }
-    } else if (buffer[0] == '<') { /* Unregister Sensor */
-      char id[STR], key[STR];
-      sscanf(buffer, " <%[^#]#%[^#]", id, key);
-      for (int i = 0; i < MAX_SENSORS; i++) {
-        if (checkSensor(&shm->sensors[i], id, key)) {
-          cpySensor(&shm->sensors[i], &NULL_SENSOR);
-          #ifdef DEBUG
-            printf("DEBUG >> SENSOR REMOVED: {%s, %s, %d, %d, %d}\n", shm->sensors[i].id, shm->sensors[i].key, shm->sensors[i].min, shm->sensors[i].max, shm->sensors[i].inter);
-          #endif
-          break;
-        }
-      }
-    } else { /* Send data to internal queue */
-      char id[STR], key[STR];
-      sscanf(buffer, " %[^#]#%[^#]#%*d", id, key);
-      int flag = 0;
-      for (int i = 0; i < MAX_SENSORS; i++) {
-        if (checkSensor(&shm->sensors[i], id, key)) {
-          flag = 1;
-          break;
-        }
-      }
+    /* Send job to queue */
+    sem_wait(BLOCK_QUEUE);
+    if (queue->n < QUEUE_SZ) create_job(queue->sensor, job);
+    else write_log(fp, "QUEUE IS FULL");
+    sem_post(BLOCK_QUEUE);
 
-      if (flag) {
-        //! send to dispatcher (internal queue)
-        #ifdef DEBUG
-          printf("DEBUG >> Sending job to dispatcher! 😼\n");
-        #endif
-      }
-    }
+    // if (buffer[0] == '>') { /* Register Sensor */
+    //   Sensor s;
+    //   sscanf(buffer, " >%[^#]#%[^#]#%d#%d#%d", s.id, s.key, &s.min, &s.max, &s.inter);
+
+    //   sem_wait(BLOCK_SHM);
+    //   if ((i = searchSensor(&shm->sensors, &NULL_SENSOR, MAX_SENSORS, 0)) != -1) {
+    //     cpySensor(&shm->sensors[i], &s);
+    //     sprintf(str, "CREATED SENSOR {%s, %s, %d, %d, %d}", shm->sensors[i].id, shm->sensors[i].key, shm->sensors[i].min, shm->sensors[i].max, shm->sensors[i].inter);
+    //   } else strcpy(str, "SENSOR LIST IS FULL");
+    //   sem_post(BLOCK_SHM);
+    //   write_log(fp, str);
+    // } else { /* Send data to internal queue */
+    //   // send to dispatcher (internal queue) the content of buffer so that it can be processed by the workers
+
+    //   Sensor s = NULL_SENSOR;
+    //   int val;
+    //   sscanf(buffer, " %[^#]#%[^#]#%d", s.id, s.key, &val);
+
+    //   sem_wait(BLOCK_SHM);
+    //   if((k = searchKey(&shm->stats, s.key, MAX_KEYS)) == -1) { /* Register Key in stats */
+    //     if ((k = searchKey(&shm->stats, "", MAX_KEYS)) != -1) strcpy(shm->stats[k].key, s.key);
+    //     else {
+    //       strcpy(str, "KEY LIST IS FULL");
+    //       sem_post(BLOCK_SHM);
+    //       continue;
+    //     }
+    //   }
+
+    //   if ((i = searchSensor(&shm->sensors, &s, MAX_SENSORS, 1)) != -1) {
+    //     //! send to dispatcher (internal queue)
+    //     #ifdef DEBUG
+    //       printf("DEBUG >> Sending job to dispatcher! 😼\n");
+    //     #endif
+    //     shm->stats[k].last = val; // and maybe notify alerts_watcher
+    //   } // (it's like sensor doesn't exist)
+    //   sem_post(BLOCK_SHM);
+    // }
   }
 }
 
@@ -269,49 +333,111 @@ void * console_reader_func(void * param) {
   // open pipe
   if ((fd_user = open(USER_FIFO, O_RDWR)) < 0) handle_error_log(fp, "open user fifo");
 
-  Message msg;
+  Command cmd;
   int size;
   fd_set set;
+  Job job;
+  job.type = 1;
+
 
   while(1) {
     FD_ZERO(&set);
     FD_SET(fd_user, &set);
 
     if (select(fd_user + 1, &set, NULL, NULL, NULL) < 0) handle_error_log(fp, "select user fifo");
-    if ((size = read(fd_user, &msg, sizeof(Message))) < 0) handle_error_log(fp, "read user fifo");
-    
-    if (msg.command == 1) { // add alert
-      for (int i = 0; i < MAX_ALERTS; i++) {
-        
-      }
-    } else if (msg.command == 2) { // remove alert
+    if ((size = read(fd_user, &cmd, sizeof(Command))) < 0) handle_error_log(fp, "read user fifo");
+    job.cmd = cmd;
 
-    } else if (msg.command == 3) { // list alerts
+    /* Send job to queue */
+    sem_wait(BLOCK_QUEUE);
+    if (queue->n < QUEUE_SZ) create_job(queue->user, job);
+    else write_log(fp, "QUEUE IS FULL");
+    sem_post(BLOCK_QUEUE);
 
-    } else if (msg.command == 4) { // sensors
-
-    } else if (msg.command == 5) { // stats 
-
-    } else if (msg.command == 6) { // reset
-
-    }
+    // msg.type = cmd.user;
+    // if (cmd.command == 1) { // add alert
+    //   sem_wait(BLOCK_SHM);
+    //   if ((i = searchAlert(&shm->alerts, &NULL_ALERT, MAX_ALERTS, 0)) != -1) {
+    //     cpyAlert(&shm->alerts[i], &cmd.alert);
+    //     sprintf(msg.response, "CREATED ALERT: {%s, %s, %d, %d}", shm->alerts[i].id, shm->alerts[i].key, shm->alerts[i].min, shm->alerts[i].max);
+    //   } else strcpy(msg.response, "NO MORE SPACE FOR NEW ALERTS");
+    //   sem_post(BLOCK_SHM);
+    //   write_log(fp, msg.response);
+    // } else if (cmd.command == 2) { // remove alert
+    //   sem_wait(BLOCK_SHM);
+    //   if ((searchAlert(&shm->alerts, &cmd.alert, MAX_ALERTS, 1)) != -1) {
+    //     cpyAlert(&shm->alerts[i], &NULL_ALERT);
+    //     strcpy(msg.response, "OK\n");
+    //   } else strcpy(msg.response, "COULD NOT FIND ALERT\n");
+    //   sem_post(BLOCK_SHM);
+    // } else if (cmd.command == 3) { // list alerts
+    //   sprintf(msg.response, "%-32s %-32s %-5s %-5s\n", "ID", "KEY", "MIN", "MAX");
+    //   sem_wait(BLOCK_SHM);
+    //   for (int j = 0; j < MAX_ALERTS; j++) {
+    //     if (!compareAlerts(&shm->alerts[j], &NULL_ALERT)) { // its not null
+    //       char holder[MAX];
+    //       sprintf(holder, "%-32s %-32s %-5d %-5d\n", shm->alerts[j].id, shm->alerts[j].key, shm->alerts[j].min, shm->alerts[j].max);
+    //       strcat(msg.response, holder);
+    //     }
+    //   }
+    //   sem_post(BLOCK_SHM);
+    // } else if (cmd.command == 4) { // sensors
+    //   strcpy(msg.response, "ID\n");
+    //   sem_wait(BLOCK_SHM);
+    //   for (int j = 0; j < MAX_SENSORS; j++) {
+    //     if (!compareSensors(&shm->sensors[j], &NULL_SENSOR)) {
+    //       char holder[STR];
+    //       sprintf(holder, "%s\n", shm->sensors[j].id);
+    //       strcat(msg.response, holder);
+    //     }
+    //   }
+    //   sem_post(BLOCK_SHM);
+    // } else if (cmd.command == 5) { // stats
+    //   sem_wait(BLOCK_SHM);
+    //   sprintf(msg.response, "%-32s %-5s %-5s %-5s %-5s %-5s\n", "Key", "Last", "Min", "Max", "Avg", "Count");
+    //   for (int j = 0; j < MAX_KEYS; j++) {
+    //     Key k = shm->stats[j];
+    //     if (!(strcmp(k.key, "") == 0)) {
+    //       char holder[MAX];
+    //       sprintf(holder, "%-32s %-5d %-5d %-5d %-5.1f %-5d\n", k.key, k.last, k.min, k.max, k.avg, k.count);
+    //       strcat(msg.response, holder);
+    //     }
+    //   }
+    //   sem_post(BLOCK_SHM);
+    // } else if (cmd.command == 6) { // reset
+    //   sem_wait(BLOCK_SHM);
+    //   for (int j = 0; j < MAX_SENSORS; j++) cpySensor(&shm->sensors[j], &NULL_SENSOR);
+    //   for (int j = 0; j < MAX_KEYS; j++) cpyKey(&shm->stats[j], &NULL_KEY);
+    //   sem_post(BLOCK_SHM);
+    //   strcpy(msg.response, "OK\n");
+    // }
   }
 }
 
 void * dispatcher_func(void * param) {
   write_log(fp, "THREAD DISPATCHER CREATED");
+  Job * job;
   while (1) {
-    //! if receive job from sensor_reader or console_reader do your thing:
-    if (0) {
-      if (shm->available_workers > 0) { // check if there is a worker available
-        //! send job to worker
-        #ifdef DEBUG
-          printf("DEBUG >> Sending job to worker!\n");
-        #endif
-
-        //* signal worker to start job
-        sem_post(BLOCK_WORKER); // TODO: change to conditional variable
+    // get job from queue
+    if (job == NULL) {
+      sem_wait(BLOCK_QUEUE);
+      if (queue->n > 0) {
+        job = pop_job(queue->user);
+        if (job == NULL) job = pop_job(queue->sensor); // if user queue is empty, get from sensor queue
       }
+      sem_post(BLOCK_QUEUE);
+    }
+
+    // check if there is a message to send and if there is a worker available
+    if (job != NULL && shm->available_workers > 0) {
+      //! send job to worker
+      job = NULL; // reset send
+      #ifdef DEBUG
+        printf("DEBUG >> Sending job to worker!\n");
+      #endif
+      
+      //* signal worker to start job
+      sem_post(BLOCK_WORKER); // TODO: change to conditional variable
     }
   }
 }
@@ -382,6 +508,7 @@ int main(int argc, char **argv) {
   if ((BLOCK_WORKER = sem_open(MUTEX_WORKER, O_CREAT | O_EXCL, 0666, 0)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_WORKER SEMAPHORE"); // block workers when there are no jobs
   if ((BLOCK_LOGGER = sem_open(MUTEX_LOGGER, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_LOGGER SEMAPHORE"); // block when someone is using the log file
   if ((STILL_WORKING = sem_open(MUTEX_STILL_WORKING, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING STILL_WORKING SEMAPHORE"); // block when there are still workers working
+  if ((BLOCK_QUEUE = sem_open(MUTEX_QUEUE, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_QUEUE SEMAPHORE"); // block when someone is using the queue
 
   /* Create FIFO's */
   if (mkfifo(SENSOR_FIFO, 0666) == -1) handle_error("CREATING SENSOR FIFO");
@@ -394,19 +521,30 @@ int main(int argc, char **argv) {
   size_t mem_struct_size = sizeof(Mem_struct);
   size_t sensors_size = MAX_SENSORS*sizeof(Sensor);
   size_t alerts_size = MAX_ALERTS*sizeof(Alert);
-  if ((shmid = shmget(IPC_PRIVATE, mem_struct_size + sensors_size + alerts_size, 0666 | IPC_CREAT | IPC_EXCL)) == -1) handle_error_log(fp, "ERROR >> CREATING SHARED MEMORY");
-  if ((shm = (Mem_struct *) shmat(shmid, NULL, 0)) == (Mem_struct *) -1) handle_error_log(fp, "ERROR >> ATTACHING SHARED MEMORY");
+  size_t stats_size = MAX_KEYS*sizeof(Stat);
+  if ((shmid = shmget(IPC_PRIVATE, mem_struct_size + sensors_size + alerts_size + stats_size, 0666 | IPC_CREAT | IPC_EXCL)) == -1) handle_error_log(fp, "CREATING SHARED MEMORY");
+  if ((shm = (Mem_struct *) shmat(shmid, NULL, 0)) == (Mem_struct *) -1) handle_error_log(fp, "ATTACHING SHARED MEMORY");
 
   /* Initialize Shared Memory */
   shm->workers = N_WORKERS;
   shm->available_workers = 0;
   shm->sensors = (Sensor *)((void *)shm + mem_struct_size); 
   shm->alerts = (Alert *)((void *)shm + mem_struct_size + sensors_size);
-  for (int i = 0; i < MAX_SENSORS; i++) shm->sensors[i] = NULL_SENSOR;
-  for (int i = 0; i < MAX_ALERTS; i++) shm->alerts[i] = NULL_ALERT;
+  shm->stats = (Stat *)((void *) shm + mem_struct_size + sensors_size + alerts_size);
+  for (int i = 0; i < MAX_SENSORS; i++) cpySensor(&shm->sensors[i], &NULL_SENSOR);
+  for (int i = 0; i < MAX_ALERTS; i++) cpyAlert(&shm->alerts[i], &NULL_ALERT);
+  for (int i = 0; i < MAX_KEYS; i++) cpyStat(&shm->stats[i], &NULL_STAT);
 
   #ifdef DEBUG
     printf("DEBUG >> shmid = %d\n", shmid);
+  #endif
+  
+  /* Internal Queue */
+  if ((mqid = msgget(MESSAGE_QUEUE, IPC_CREAT | IPC_EXCL | 0666)) == -1) handle_error_log(fp, "CREATING INTERNAL QUEUE");
+  queue->n = 0; // initialize queue
+
+  #ifdef DEBUG
+    printf("DEBUG >> mqid = %d\n", mqid);
   #endif
 
   /* Sensor Reader, Console Reader and Dispatcher */
