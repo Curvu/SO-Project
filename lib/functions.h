@@ -73,21 +73,21 @@ char *get_hour();
 
 /**
  * @brief compare two sensors
- * @param Sensor* s1
- * @param Sensor* s2
+ * @param Sensor s1
+ * @param Sensor s2
  * @return 1 if s1 == s2, 0 otherwise
  */
-int compareSensors(Sensor *, Sensor *);
+int compareSensors(Sensor, Sensor);
 
 /**
  * @brief check if sensor has the same id and key
- * @param Sensor* s
+ * @param Sensor s
  * @param char* id
  * @param char* key
  * @return 1 if it's the same 0 otherwise
  */
 
-int checkSensor(Sensor *, char *, char *);
+int checkSensor(Sensor, char *, char *);
 
 /**
  * @brief copy s2 to s1 
@@ -98,21 +98,21 @@ void cpySensor(Sensor *, Sensor *);
 
 /**
  * @brief Search sensor in sensor list
- * @param Sensor** sensors
- * @param Sensor* s
+ * @param Sensor* sensors
+ * @param Sensor s
  * @param int len
  * @param int flag - 0 if it's comparing all vars, 1 if comparing id and key
  * @return return index if finds, -1 otherwise
  */
-int searchSensor(Sensor**, Sensor*, int, int);
+int searchSensor(Sensor *, Sensor, int, int);
 
 /**
  * @brief compare two alerts
- * @param Alert* a1
- * @param Alert* a2
+ * @param Alert a1
+ * @param Alert a2
  * @return 1 if a1 == a2, 0 otherwise
  */
-int compareAlerts(Alert *, Alert *);
+int compareAlerts(Alert, Alert);
 
 /**
  * @brief copy a2 to a1 
@@ -123,13 +123,13 @@ void cpyAlert(Alert *, Alert *);
 
 /**
  * @brief Search alert in alert list
- * @param Alert** alerts
- * @param Alert* a
+ * @param Alert* alerts
+ * @param Alert a
  * @param int len
  * @param int flag - 0 if it's comparing all vars, 1 if comparing only id
  * @return return index if finds, -1 otherwise
  */
-int searchAlert(Alert**, Alert*, int, int);
+int searchAlert(Alert *, Alert, int, int);
 
 /**
  * @brief copy k2 to k1 
@@ -140,11 +140,11 @@ void cpyStat(Stat *, Stat *);
 
 /**
  * @brief Search key in stat list
- * @param Stat** stats
+ * @param Stat* stats
  * @param char* k
  * @param int len
  * @return return index if finds, -1 otherwise
  */
-int searchStat(Stat**, char *, int);
+int searchStat(Stat *, char *, int);
 
 #endif // FUNCTIONS_H

@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/select.h>
 #include <sys/msg.h>
+#include <limits.h>
 #include "lib/functions.h"
 
 
@@ -241,40 +242,37 @@ void worker(int num) {
 
     // Worker is ready to receive job
     write_log(fp, buffer);
-
-    sem_wait(BLOCK_SHM);
     shm->workers[num-1] = 1; // worker is available
-    sem_post(BLOCK_SHM);
-    
+
     // wait for job
     FD_ZERO(&set);
     FD_SET(fd, &set);
     select(fd+1, &set, NULL, NULL, NULL);
-
-    write_log(fp, "WORKER RECEIVED JOB");
-
     // block signal handler
     act.sa_handler = SIG_IGN;
     sigaction(SIGUSR2, &act, NULL);
+    if (read(pipes[num-1][0], &job, sizeof(Job)) < 0) handle_error_log(fp, "READING FROM PIPE");
+    #ifdef DEBUG
+      printf("DEBUG >> Worker %d received job\n", num); fflush(stdout);
+    #endif
 
     //* start job
-    if (read(pipes[num-1][0], &job, sizeof(Job)) < 0) handle_error_log(fp, "READING FROM PIPE");
+    write_log(fp, "WORKER RECEIVED JOB");
 
-    //! Do your thing here
-    if (job.type) { /* From user */
+    if (job.type) { /* Job from user */
       Command c = job.cmd;
       msg.type = c.user;
       if (c.command == 1) { /* Add Alert */
         sem_wait(BLOCK_SHM);
-        if ((i = searchAlert(&shm->alerts, &NULL_ALERT, MAX_ALERTS, 0)) != -1) {
-          cpyAlert(&shm->alerts[i], &c.alert);
+        if ((i = searchAlert(shm->alerts, NULL_ALERT, MAX_ALERTS, 0)) != -1) {
+          shm->alerts[i] = c.alert;
           strcpy(msg.response, "OK\n");
         } else strcpy(msg.response, "ERROR\n");
         sem_post(BLOCK_SHM);
       } else if (c.command == 2) { /* Remove Alert */
         sem_wait(BLOCK_SHM);
-        if ((searchAlert(&shm->alerts, &c.alert, MAX_ALERTS, 1)) != -1) { // found alert
-          cpyAlert(&shm->alerts[i], &NULL_ALERT);
+        if ((searchAlert(shm->alerts, c.alert, MAX_ALERTS, 1)) != -1) { // found alert
+          shm->alerts[i] = NULL_ALERT;
           strcpy(msg.response, "OK\n");
         } else strcpy(msg.response, "ERROR\n");
         sem_post(BLOCK_SHM);
@@ -282,7 +280,7 @@ void worker(int num) {
         sprintf(msg.response, "%-32s %-32s %-5s %-5s\n", "ID", "KEY", "MIN", "MAX");
         sem_wait(BLOCK_SHM);
         for (int j = 0; j < MAX_ALERTS; j++) {
-          if (!compareAlerts(&shm->alerts[j], &NULL_ALERT)) { // its not null
+          if (!compareAlerts(shm->alerts[j], NULL_ALERT)) { // its not null
             char holder[MAX];
             sprintf(holder, "%-32s %-32s %-5d %-5d\n", shm->alerts[j].id, shm->alerts[j].key, shm->alerts[j].min, shm->alerts[j].max);
             strcat(msg.response, holder);
@@ -293,7 +291,7 @@ void worker(int num) {
         strcpy(msg.response, "ID\n");
         sem_wait(BLOCK_SHM);
         for (int j = 0; j < MAX_SENSORS; j++) {
-          if (!compareSensors(&shm->sensors[j], &NULL_SENSOR)) { // its not null
+          if (!compareSensors(shm->sensors[j], NULL_SENSOR)) { // its not null
             char holder[STR+1];
             sprintf(holder, "%s\n", shm->sensors[j].id);
             strcat(msg.response, holder);
@@ -314,48 +312,49 @@ void worker(int num) {
         sem_post(BLOCK_SHM);
       } else if (c.command == 6) { /* Reset */
         sem_wait(BLOCK_SHM);
-        for (int j = 0; j < MAX_SENSORS; j++) cpySensor(&shm->sensors[j], &NULL_SENSOR);
-        for (int j = 0; j < MAX_KEYS; j++) cpyStat(&shm->stats[j], &NULL_STAT);
+        for (int j = 0; j < MAX_SENSORS; j++) shm->sensors[j] = NULL_SENSOR;
+        for (int j = 0; j < MAX_KEYS; j++) shm->stats[j] = NULL_STAT;
         sem_post(BLOCK_SHM);
         strcpy(msg.response, "OK\n");
       }
 
       /* Send response to user */
       if (msgsnd(mqid, &msg, sizeof(Message) - sizeof(long), 0) < 0) handle_error_log(fp, "SENDING MESSAGE TO USER");
-    } else { /* From sensor */
+      write_log(fp, "SENT MESSAGE TO USER");
+    } else { /* Job from sensor */
       Sensor s;
       if (job.content[0] == '>') { /* Register Sensor */
         sscanf(job.content, " >%[^#]#%[^#]#%d#%d#%d", s.id, s.key, &s.min, &s.max, &s.inter);
 
         sem_wait(BLOCK_SHM);
-        if ((i = searchSensor(&shm->sensors, &NULL_SENSOR, MAX_SENSORS, 0)) != -1) cpySensor(&shm->sensors[i], &s); //* created sensor
-        else write_log(fp, "SENSOR LIST IS FULL");
+        if ((i = searchSensor(shm->sensors, NULL_SENSOR, MAX_SENSORS, 0)) != -1) {
+          shm->sensors[i] = s; // create sensor
+          /* Create key */
+          if (searchStat(shm->stats, s.key, MAX_KEYS) == -1) { // key doesn't exist
+            if ((i = searchStat(shm->stats, "", MAX_KEYS)) != -1) { // find empty key
+              strcpy(shm->stats[i].key, s.key); // create key
+              Stat *stat = &shm->stats[i];
+              stat->avg = 0;
+              stat->count = 0;
+              stat->last = 0;
+              stat->max = 0;
+              stat->min = INT_MAX;
+            } else write_log(fp, "KEY LIST IS FULL");
+          } else write_log(fp, "KEY ALREADY EXISTS");
+        } else write_log(fp, "SENSOR LIST IS FULL");
         sem_post(BLOCK_SHM);
       } else { /* Update Key */
-        int val, k;
+        int val;
         sscanf(job.content, " %[^#]#%[^#]#%d", s.id, s.key, &val);
-
         sem_wait(BLOCK_SHM);
-        if ((i = searchSensor(&shm->sensors, &s, MAX_SENSORS, 1)) != -1) { /* Sensor exists */
-          if((k = searchStat(&shm->stats, s.key, MAX_KEYS)) == -1) { /* Key doesn't exist */
-            if ((k = searchStat(&shm->stats, "", MAX_KEYS)) != -1) {
-              strcpy(shm->stats[k].key, s.key); // create key
-              Stat *stat = &shm->stats[k];
-              stat->avg = val;
-              stat->count = 1;
-              stat->last = val;
-              stat->min = val;
-              stat->max = val;
-            } else write_log(fp, "KEY LIST IS FULL");
-          } else {
-            Stat *stat = &shm->stats[k];
-            stat->avg = (stat->avg * stat->count + val) / (stat->count + 1); // update average
-            stat->count++;
-            stat->last = val;
-            if (val < stat->min) stat->min = val;
-            if (val > stat->max) stat->max = val;
-          }
-        } // (it's like sensor doesn't exist)
+        if ((searchSensor(shm->sensors, s, MAX_SENSORS, 1) != -1) && ((i = searchStat(shm->stats, s.key, MAX_KEYS)) != -1)) { // sensor exist (and key exist)
+          Stat *stat = &shm->stats[i];
+          stat->avg = (stat->avg * stat->count + val) / (stat->count + 1); // update average
+          stat->count++;
+          stat->last = val;
+          if (val < stat->min) stat->min = val;
+          if (val > stat->max) stat->max = val;
+        }
         sem_post(BLOCK_SHM);
       }
     }
@@ -434,11 +433,6 @@ void * sensor_reader_func(void * param) {
     if (queue.n < QUEUE_SZ) queue.sensor = create_job(queue.sensor, job);
     else write_log(fp, "QUEUE IS FULL");
     pthread_mutex_unlock(&BLOCK_QUEUE);
-
-    memset(job.content, 0, MAX);
-    cpyAlert(&job.cmd.alert, &NULL_ALERT);
-    job.cmd.user = -1;
-    job.cmd.command = -1;
   }
 }
 
@@ -493,11 +487,10 @@ void * dispatcher_func(void * param) {
     }
 
     // check if there is a message to send and if there is a worker available
-    sem_wait(BLOCK_SHM);
     if (job.type != -1 && sum_array(shm->workers, N_WORKERS) > 0) {
       // find the available worker
-      int i = 0;
-      for (; i < N_WORKERS; i++) if (shm->workers[i]) break;
+      int i;
+      for (i = 0; i < N_WORKERS; i++) if (shm->workers[i]) break;
       shm->workers[i] = 0; // set worker to busy
       
       // send job to worker - pipe
@@ -508,7 +501,6 @@ void * dispatcher_func(void * param) {
       write(pipes[i][1], &job, sizeof(Job));
       job.type = -1;
     }
-    sem_post(BLOCK_SHM);
   }
 }
 
@@ -521,6 +513,8 @@ int main(int argc, char **argv) {
   unlink(SENSOR_FIFO);
   sem_unlink(MUTEX_LOGGER);
   sem_unlink(MUTEX_SHM);
+  msgctl(msgget(MESSAGE_QUEUE_KEY, IPC_CREAT | 0666), IPC_RMID, NULL);
+
 
   if (argc != 2) handle_error("INVALID NUMBER OF ARGUMENTS");
   if ((fp = fopen(LOG_FILE, "a+")) == NULL) handle_error("OPENING LOG FILE");
@@ -576,9 +570,9 @@ int main(int argc, char **argv) {
   shm->alerts = (Alert *)((void *)shm + workers_size + mem_struct_size + sensors_size);
   shm->stats = (Stat *)((void *) shm + workers_size + mem_struct_size + sensors_size + alerts_size);
   for (int i = 0; i < N_WORKERS; i++) shm->workers[i] = 0; // initialize workers (1 = available, 0 not available)
-  for (int i = 0; i < MAX_SENSORS; i++) cpySensor(&shm->sensors[i], &NULL_SENSOR);
-  for (int i = 0; i < MAX_ALERTS; i++) cpyAlert(&shm->alerts[i], &NULL_ALERT);
-  for (int i = 0; i < MAX_KEYS; i++) cpyStat(&shm->stats[i], &NULL_STAT);
+  for (int i = 0; i < MAX_SENSORS; i++) shm->sensors[i] = NULL_SENSOR;
+  for (int i = 0; i < MAX_ALERTS; i++) shm->alerts[i] = NULL_ALERT;
+  for (int i = 0; i < MAX_KEYS; i++) shm->stats[i] = NULL_STAT;
 
   #ifdef DEBUG
     printf("DEBUG >> shmid = %d\n", shmid);
