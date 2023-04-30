@@ -16,6 +16,14 @@ char buffer[MAX];
 struct sigaction act;
 
 void cleanup() {
+  /* Send message to server requesting to remove sensor */
+  sprintf(buffer, "<%s#%s", sensor.id, sensor.key);
+  if (write(fifo, buffer, strlen(buffer)) == -1) {
+    perror("Error registering sensor");
+    close(fifo);
+    exit(EXIT_FAILURE);
+  }
+
   /* Close FIFO */
   close(fifo);
   exit(0);
