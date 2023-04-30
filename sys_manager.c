@@ -25,6 +25,7 @@
 #define LOG_FILE "log.txt"
 #define MUTEX_SHM "/mutex_shared_memory"
 #define MUTEX_LOGGER "/mutex_logger"
+#define MUTEX_ALERT "/mutex_alert"
 int QUEUE_SZ, N_WORKERS, MAX_KEYS, MAX_SENSORS, MAX_ALERTS;
 FILE *fp;
 
@@ -48,7 +49,7 @@ int **pipes;
 
 /* Mutexes and Semaphores and Condition Variables */
 pthread_mutex_t BLOCK_QUEUE = PTHREAD_MUTEX_INITIALIZER;
-sem_t *BLOCK_LOGGER, *BLOCK_SHM;
+sem_t *BLOCK_LOGGER, *BLOCK_SHM, *WAIT_ALERT;
 
 
 /* Thread Sensor Reader */
@@ -99,12 +100,6 @@ void write_log(FILE *fp, char * content) {
 }
 
 
-int sum_array(int * array, int size) {
-  int sum = 0;
-  for (int i = 0; i < size; i++) sum += array[i];
-  return sum;
-}
-
 /* ----------------------------- */
 /*            Cleanup            */
 /* ----------------------------- */
@@ -117,6 +112,7 @@ void cleanup() {
   pthread_join(console_reader, NULL);
   pthread_join(dispatcher, NULL);
 
+  write_log(fp, "HOME_IOT SIMULATOR WAITING FOR LAST TASKS TO FINISH");
   /* Kill all processes */
   for (int i = 0; i < N_WORKERS + 1; i++) if (processes[i] > 0) kill(processes[i], SIGUSR2);
   for (int i = 0; i < N_WORKERS + 1; i++) wait(NULL);
@@ -143,6 +139,8 @@ void cleanup() {
   sem_close(BLOCK_SHM);
   sem_unlink(MUTEX_SHM);
   pthread_mutex_destroy(&BLOCK_QUEUE);
+  sem_close(WAIT_ALERT);
+  sem_unlink(MUTEX_ALERT);
 
   /* Remove FIFO's */
   unlink(SENSOR_FIFO);
@@ -226,15 +224,14 @@ void sigusr2_handler(int sig) { // to close processes
 /*       Process Functions       */
 /* ----------------------------- */
 void worker(int num) {
-  char buffer[MAX];
+  char buffer[MAX], log[MAX];
   sprintf(buffer, "WORKER %d READY", num);
 
   Job job;
-  fd_set set;
-  int fd = pipes[num-1][0];
-  int i;
   Message msg; // message to send to user (message queue)
 
+  int i, fd = pipes[num-1][0];
+  fd_set set;
   while(1) {
     // set signal handler for sigusr2
     act.sa_handler = sigusr2_handler;
@@ -252,13 +249,8 @@ void worker(int num) {
     act.sa_handler = SIG_IGN;
     sigaction(SIGUSR2, &act, NULL);
     if (read(pipes[num-1][0], &job, sizeof(Job)) < 0) handle_error_log(fp, "READING FROM PIPE");
-    #ifdef DEBUG
-      printf("DEBUG >> Worker %d received job\n", num); fflush(stdout);
-    #endif
 
     //* start job
-    write_log(fp, "WORKER RECEIVED JOB");
-
     if (job.type) { /* Job from user */
       Command c = job.cmd;
       msg.type = c.user;
@@ -269,13 +261,16 @@ void worker(int num) {
           strcpy(msg.response, "OK\n");
         } else strcpy(msg.response, "ERROR\n");
         sem_post(BLOCK_SHM);
+        sprintf(log, "WORKER%d: ADD ALERT %s (%s %d TO %d) PROCESSING COMPLETED", num, c.alert.id, c.alert.key, c.alert.min, c.alert.max);
       } else if (c.command == 2) { /* Remove Alert */
         sem_wait(BLOCK_SHM);
-        if ((searchAlert(shm->alerts, c.alert, MAX_ALERTS, 1)) != -1) { // found alert
+        printf("DEBUG >>>>>>>>>>>>>>>>>><< %s\n", c.alert.id);
+        if ((i = searchAlert(shm->alerts, c.alert, MAX_ALERTS, 1)) != -1) { // found alert
           shm->alerts[i] = NULL_ALERT;
           strcpy(msg.response, "OK\n");
         } else strcpy(msg.response, "ERROR\n");
         sem_post(BLOCK_SHM);
+        sprintf(log, "WORKER%d: REMOVE ALERT %s PROCESSING COMPLETED", num, c.alert.id);
       } else if (c.command == 3) { /* List Alerts */
         sprintf(msg.response, "%-32s %-32s %-5s %-5s\n", "ID", "KEY", "MIN", "MAX");
         sem_wait(BLOCK_SHM);
@@ -287,6 +282,7 @@ void worker(int num) {
           }
         }
         sem_post(BLOCK_SHM);
+        sprintf(log, "WORKER%d: LIST ALERTS PROCESSING COMPLETED", num);
       } else if (c.command == 4) { /* List Sensors */
         strcpy(msg.response, "ID\n");
         sem_wait(BLOCK_SHM);
@@ -298,6 +294,7 @@ void worker(int num) {
           }
         }
         sem_post(BLOCK_SHM);
+        sprintf(log, "WORKER%d: LIST ACTIVE SENSORS PROCESSING COMPLETED", num);
       } else if (c.command == 5) { /* List Stats */
         sprintf(msg.response, "%-32s %-5s %-5s %-5s %-5s %-5s\n", "Key", "Last", "Min", "Max", "Avg", "Count");
         sem_wait(BLOCK_SHM);
@@ -310,17 +307,18 @@ void worker(int num) {
           }
         }
         sem_post(BLOCK_SHM);
+        sprintf(log, "WORKER%d: LIST STATS PROCESSING COMPLETED", num);
       } else if (c.command == 6) { /* Reset */
         sem_wait(BLOCK_SHM);
         for (int j = 0; j < MAX_SENSORS; j++) shm->sensors[j] = NULL_SENSOR;
         for (int j = 0; j < MAX_KEYS; j++) shm->stats[j] = NULL_STAT;
         sem_post(BLOCK_SHM);
         strcpy(msg.response, "OK\n");
+        sprintf(log, "WORKER%d: RESET PROCESSING COMPLETED", num);
       }
 
       /* Send response to user */
       if (msgsnd(mqid, &msg, sizeof(Message) - sizeof(long), 0) < 0) handle_error_log(fp, "SENDING MESSAGE TO USER");
-      write_log(fp, "SENT MESSAGE TO USER");
     } else { /* Job from sensor */
       Sensor s;
       if (job.content[0] == '>') { /* Register Sensor */
@@ -337,12 +335,19 @@ void worker(int num) {
               stat->avg = 0;
               stat->count = 0;
               stat->last = 0;
-              stat->max = 0;
+              stat->max = INT_MIN;
               stat->min = INT_MAX;
             } else write_log(fp, "KEY LIST IS FULL");
           } else write_log(fp, "KEY ALREADY EXISTS");
         } else write_log(fp, "SENSOR LIST IS FULL");
         sem_post(BLOCK_SHM);
+        sprintf(log, "WORKER%d: REGISTER SENSOR %s PROCESSING COMPLETED", num, s.id);
+      } else if (job.content[0] == '<') { /* Remove Sensor */
+        sscanf(job.content, " <%[^#]#%[^#]", s.id, s.key);
+        sem_wait(BLOCK_SHM);
+        if((i = searchSensor(shm->sensors, s, MAX_SENSORS, 1)) != -1) shm->sensors[i] = NULL_SENSOR; // remove sensor
+        sem_post(BLOCK_SHM);
+        sprintf(log, "WORKER%d: REMOVE SENSOR %s PROCESSING COMPLETED", num, s.id);
       } else { /* Update Key */
         int val;
         sscanf(job.content, " %[^#]#%[^#]#%d", s.id, s.key, &val);
@@ -356,20 +361,41 @@ void worker(int num) {
           if (val > stat->max) stat->max = val;
         }
         sem_post(BLOCK_SHM);
+        sem_post(WAIT_ALERT);
+        sprintf(log, "WORKER%d: %s DATA PROCESSING COMPLETED", num, s.key);
       }
     }
+    write_log(fp, log);
   }
 }
 
 void alert_watcher() {
   write_log(fp, "ALERT WATCHER READY");
+  int i, k;
+  Message msg;
 
   act.sa_handler = sigusr2_handler;
   sigaction(SIGUSR2, &act, NULL);
 
-  // ve os alertas e o que foi gerado pelo sensor
-  // envia mensagem
-  while(1);
+  while(1) {
+    // go through alerts check min max and compare with stats
+    sem_wait(WAIT_ALERT);
+    for (i = 0; i < MAX_ALERTS; i++) {
+      if (!compareAlerts(shm->alerts[i], NULL_ALERT)) {
+        Alert a = shm->alerts[i];
+        if ((k = searchStat(shm->stats, a.key, MAX_KEYS)) != -1) {
+          Stat stat = shm->stats[k];
+          if (stat.last < a.min || stat.last > a.max) { // alert triggered
+            // send message to user
+            msg.type = a.user;
+            sprintf(msg.response, "ALERT %s (%s %d TO %d) TRIGGERED\n", a.id, a.key, a.min, a.max);
+            if (msgsnd(mqid, &msg, sizeof(Message) - sizeof(long), 0) < 0) handle_error_log(fp, "SENDING MESSAGE TO USER");
+            write_log(fp, msg.response);
+          }
+        }
+      }
+    }
+  }
 }
 
 
@@ -469,6 +495,7 @@ void * dispatcher_func(void * param) {
   write_log(fp, "THREAD DISPATCHER CREATED");
   Job job;
   job.type = -1;
+  char log[MAX];
 
   while (1) {
     // get job from queue
@@ -497,6 +524,31 @@ void * dispatcher_func(void * param) {
       #ifdef DEBUG
         printf("DEBUG >> Sending job to worker %d!\n", i+1);
       #endif
+
+      
+      if (job.type) { /* From user */
+        int c = job.cmd.command;
+        Alert a = job.cmd.alert;
+        if (c == 1) sprintf(log, "DISPATCHER: ADD ALERT %s (%s %d TO %d) SENT FOR PROCESSING ON WORKER %d", a.id, a.key, a.min, a.max, i+1);
+        if (c == 2) sprintf(log, "DISPATCHER: REMOVE ALERT %s SENT FOR PROCESSING ON WORKER %d", a.id, i+1);
+        if (c == 3) sprintf(log, "DISPATCHER: LIST ALERTS SENT FOR PROCESSING ON WORKER %d", i+1);
+        if (c == 4) sprintf(log, "DISPATCHER: LIST ACTIVE SENSORS SENT FOR PROCESSING ON WORKER %d", i+1);
+        if (c == 5) sprintf(log, "DISPATCHER: LIST STATS SENT FOR PROCESSING ON WORKER %d", i+1);
+        if (c == 6) sprintf(log, "DISPATCHER: RESET STATS SENT FOR PROCESSING ON WORKER %d", i+1);
+      } else { /* From sensor */
+        char id[STR], key[STR];
+        if (job.content[0] == '>') { // request to send data
+          sscanf(job.content, " >%[^#]#%[^#]#%*d#%*d#%*d", id, key);
+          sprintf(log, "DISPATCHER: REGISTER SENSOR %s SENT FOR PROCESSING ON WORKER %d", id, i+1);
+        } else if (job.content[0] == '<') {
+          sscanf(job.content, " <%[^#]#%[^#]", id, key);
+          sprintf(log, "DISPATCHER: REMOVE SENSOR %s SENT FOR PROCESSING ON WORKER %d", id, i+1);
+        } else {
+          sscanf(job.content, " %[^#]#%[^#]#%*d", id, key);
+          sprintf(log, "DISPATCHER: %s DATA (FROM %s SENSOR) SENT FOR PROCESSING ON WORKER %d", key, id, i+1);
+        }
+      }
+      write_log(fp, log);
 
       write(pipes[i][1], &job, sizeof(Job));
       job.type = -1;
@@ -547,6 +599,7 @@ int main(int argc, char **argv) {
   /* Semaphores */
   if ((BLOCK_SHM = sem_open(MUTEX_SHM, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_SHM SEMAPHORE");          // block when someone is using the shared memory
   if ((BLOCK_LOGGER = sem_open(MUTEX_LOGGER, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_LOGGER SEMAPHORE"); // block when someone is using the log file
+  if ((WAIT_ALERT = sem_open(MUTEX_ALERT, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING WAIT_ALERT SEMAPHORE");       // block when someone is using the alerts array
 
   /* Create FIFO's */
   if (mkfifo(SENSOR_FIFO, 0666) == -1) handle_error("CREATING SENSOR FIFO");
