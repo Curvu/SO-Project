@@ -58,14 +58,6 @@ int checkSensor(Sensor s, char *id, char *key) {
   return (strcmp(s.id, id) == 0) && (strcmp(s.key, key) == 0);
 }
 
-void cpySensor(Sensor *s1, Sensor *s2) {
-  strcpy(s1->id, s2->id);
-  strcpy(s1->key, s2->key);
-  s1->min = s2->min;
-  s1->max = s2->max;
-  s1->inter = s2->inter;
-}
-
 int searchSensor(Sensor * sensors, Sensor s, int len, int flag) {
   for (int i = 0; i < len; i++) {
     if ((!flag && compareSensors(sensors[i], s)) || (flag && checkSensor(sensors[i], s.id, s.key))) return i;
@@ -77,28 +69,11 @@ int compareAlerts(Alert a1, Alert a2) {
   return (strcmp(a1.id, a2.id) == 0) && (strcmp(a1.key, a2.key) == 0) && (a1.min == a2.min) && (a1.max == a2.max) && (a1.user == a2.user);
 }
 
-void cpyAlert(Alert *a1, Alert *a2) {
-  strcpy(a1->id, a2->id);
-  strcpy(a1->key, a2->key);
-  a1->min = a2->min;
-  a1->max = a2->max;
-  a1->user = a2->user;
-}
-
 int searchAlert(Alert * alerts, Alert a, int len, int flag) {
   for (int i = 0; i < len; i++) {
-    if ((!flag && compareAlerts(alerts[i], a)) || (flag && strcmp(alerts[i].id, a.id))) return i;
+    if ((!flag && compareAlerts(alerts[i], a)) || (flag && (strcmp(alerts[i].id, a.id) == 0))) return i;
   }
   return -1;
-}
-
-void cpyStat(Stat *s1, Stat *s2) {
-  strcpy(s1->key, s2->key);
-  s1->min = s2->min;
-  s1->max = s2->max;
-  s1->last = s2->last;
-  s1->avg = s2->avg;
-  s1->count = s2->count;
 }
 
 int searchStat(Stat * stats, char *k, int len) { // CHECK THIS FKING FUNCTION
@@ -106,4 +81,10 @@ int searchStat(Stat * stats, char *k, int len) { // CHECK THIS FKING FUNCTION
     if (strcmp(stats[i].key, k) == 0) return i;
   }
   return -1;
+}
+
+int sum_array(int * array, int size) {
+  int sum = 0;
+  for (int i = 0; i < size; i++) sum += array[i];
+  return sum;
 }

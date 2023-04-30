@@ -90,13 +90,6 @@ int compareSensors(Sensor, Sensor);
 int checkSensor(Sensor, char *, char *);
 
 /**
- * @brief copy s2 to s1 
- * @param Sensor* s1
- * @param Sensor* s2
- */
-void cpySensor(Sensor *, Sensor *);
-
-/**
  * @brief Search sensor in sensor list
  * @param Sensor* sensors
  * @param Sensor s
@@ -115,13 +108,6 @@ int searchSensor(Sensor *, Sensor, int, int);
 int compareAlerts(Alert, Alert);
 
 /**
- * @brief copy a2 to a1 
- * @param Sensor* a1
- * @param Sensor* a2
- */
-void cpyAlert(Alert *, Alert *);
-
-/**
  * @brief Search alert in alert list
  * @param Alert* alerts
  * @param Alert a
@@ -132,13 +118,6 @@ void cpyAlert(Alert *, Alert *);
 int searchAlert(Alert *, Alert, int, int);
 
 /**
- * @brief copy k2 to k1 
- * @param Stat* s1
- * @param Stat* s2
- */
-void cpyStat(Stat *, Stat *);
-
-/**
  * @brief Search key in stat list
  * @param Stat* stats
  * @param char* k
@@ -146,5 +125,13 @@ void cpyStat(Stat *, Stat *);
  * @return return index if finds, -1 otherwise
  */
 int searchStat(Stat *, char *, int);
+
+/**
+ * @brief sum all values in array
+ * @param int* array
+ * @param int len
+ * @return return sum
+ */
+int sum_array(int *, int);
 
 #endif // FUNCTIONS_H
