@@ -6,13 +6,19 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/msg.h>
+#include <pthread.h>
 #include "lib/functions.h"
 
 struct sigaction act;
-int fifo, mqid;
+pthread_t thread;
+int fifo, mqid, user_id;
 char buffer[MAX];
 
 void cleanup() {
+  /* Send SIGINT to thread */
+  pthread_kill(thread, SIGINT);
+  pthread_join(thread, NULL);
+
   /* Close FIFO */
   close(fifo);
 
@@ -28,13 +34,26 @@ void ctrlc_handler(int signo) {
   }
 }
 
+void message_listener() { // this is a thread
+  act.sa_handler = SIG_DFL; // default ctrl+c (not the handler)
+  sigaction(SIGINT, &act, NULL);
+
+  Message msg;
+  while(1) {
+    if (msgrcv(mqid, &msg, sizeof(Message), user_id, 0) == -1) {
+      perror("Error reading from Message Queue");
+      exit(EXIT_FAILURE);
+    }
+    printf("%s", msg.response);
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     printf("You must do like this example: ./user_console 32\n");
     exit(EXIT_FAILURE);
   }
 
-  int user_id;
   verifyParam(argv[1], &user_id, 1);
   if (user_id <= 0) {
     printf("User id must be greater than 0!\n");
@@ -47,15 +66,17 @@ int main(int argc, char **argv) {
     printf("Hello, user %d!\n", user_id);
   #endif
 
-  Command cmd;
-  cmd.user = user_id;
-  cmd.command = 0;
-
   /* Signal Handler */
   act.sa_flags = 0;
   sigemptyset(&act.sa_mask); // Block all signals during handler
   act.sa_handler = ctrlc_handler;
   sigaction(SIGINT, &act, NULL);
+
+  /* Create Thread to listen to Message Queue */
+  if (pthread_create(&thread, NULL, (void *) message_listener, NULL) != 0) {
+    perror("Error creating thread");
+    exit(EXIT_FAILURE);
+  }
 
   /* Open FIFO */
   if ((fifo = open(USER_FIFO, O_WRONLY)) == -1) {
@@ -70,9 +91,12 @@ int main(int argc, char **argv) {
   }
 
   /* Main */
-  Message msg;
-  char command[MAX];
   int val;
+  char command[MAX];
+  Command cmd;
+  cmd.user = user_id;
+  cmd.command = 0;
+
   while(1) {
     scanf(" %s", command);
     if (strcmp(command, "add_alert") == 0) { // <id> <key> <min> <max>
@@ -84,7 +108,7 @@ int main(int argc, char **argv) {
       if (verifyID(cmd.alert.id) && verifyKey(cmd.alert.key)) cmd.command = 1;
       else printf(">> Some invalid Parameter!!\n");
     } else if (strcmp(command, "remove_alert") == 0) { // <id>
-      val = scanf(" %[^ ]", cmd.alert.id);
+      val = scanf(" %[^\n]", cmd.alert.id);
       if (val == 0 || val == EOF) {
         printf(">> Invalid command!\n");
         continue;
@@ -105,14 +129,9 @@ int main(int argc, char **argv) {
         perror("Error writing to FIFO");
         exit(EXIT_FAILURE);
       }
+
       cmd.command = 0;
-      cpyAlert(&cmd.alert, &NULL_ALERT);
-      if (msgrcv(mqid, &msg, sizeof(Message) - sizeof(long), user_id, 0) == -1) { //!!! WHAT IF THERE WAS NO SPACE IN THE QUEUE???
-        perror("Error reading from Message Queue");
-        cleanup();
-        exit(EXIT_FAILURE);
-      }
-      printf("%s", msg.response);
+      cmd.alert = NULL_ALERT;
     }
   }
 
