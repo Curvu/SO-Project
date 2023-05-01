@@ -51,16 +51,12 @@ char * get_hour() {
 }
 
 int compareSensors(Sensor s1, Sensor s2) {
-  return (strcmp(s1.id, s2.id) == 0) && (strcmp(s1.key, s2.key) == 0) && (s1.min == s2.min) && (s1.max == s2.max) && (s1.inter == s2.inter);
+  return (strcmp(s1.id, s2.id) == 0) && (strcmp(s1.key, s2.key) == 0);
 }
 
-int checkSensor(Sensor s, char *id, char *key) {
-  return (strcmp(s.id, id) == 0) && (strcmp(s.key, key) == 0);
-}
-
-int searchSensor(Sensor * sensors, Sensor s, int len, int flag) {
+int searchSensor(Sensor * sensors, Sensor s, int len) {
   for (int i = 0; i < len; i++) {
-    if ((!flag && compareSensors(sensors[i], s)) || (flag && checkSensor(sensors[i], s.id, s.key))) return i;
+    if (compareSensors(sensors[i], s)) return i;
   }
   return -1;
 }

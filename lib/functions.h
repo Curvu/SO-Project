@@ -17,7 +17,6 @@ typedef struct {
 
 typedef struct {
   char id[STR], key[STR];
-  int min, max, inter;
 } Sensor;
 
 typedef struct {
@@ -36,7 +35,7 @@ typedef struct {
   char response[BUFFER];
 } Message;
 
-#define NULL_SENSOR (Sensor) { "", "", 0, 0, 0 }
+#define NULL_SENSOR (Sensor) { "", "" }
 #define NULL_ALERT (Alert) { "", "", 0, 0, 0 }
 #define NULL_STAT (Stat) {"", 0, 0, 0, 0, 0 }
 
@@ -80,24 +79,13 @@ char *get_hour();
 int compareSensors(Sensor, Sensor);
 
 /**
- * @brief check if sensor has the same id and key
- * @param Sensor s
- * @param char* id
- * @param char* key
- * @return 1 if it's the same 0 otherwise
- */
-
-int checkSensor(Sensor, char *, char *);
-
-/**
  * @brief Search sensor in sensor list
  * @param Sensor* sensors
  * @param Sensor s
  * @param int len
- * @param int flag - 0 if it's comparing all vars, 1 if comparing id and key
  * @return return index if finds, -1 otherwise
  */
-int searchSensor(Sensor *, Sensor, int, int);
+int searchSensor(Sensor *, Sensor, int);
 
 /**
  * @brief compare two alerts
