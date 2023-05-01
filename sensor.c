@@ -9,21 +9,13 @@
 #include "lib/functions.h"
 
 Sensor sensor;
-int value, count = 0;
+int count = 0;
 int fifo;
 char buffer[MAX];
 
 struct sigaction act;
 
 void cleanup() {
-  /* Send message to server requesting to remove sensor */
-  sprintf(buffer, "<%s#%s", sensor.id, sensor.key);
-  if (write(fifo, buffer, strlen(buffer)) == -1) {
-    perror("Error registering sensor");
-    close(fifo);
-    exit(EXIT_FAILURE);
-  }
-
   /* Close FIFO */
   close(fifo);
   exit(0);
@@ -49,13 +41,15 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
     printf("Starting sensor!\n");
   #endif
 
-  verifyParam(argv[1], sensor.id, 0);
-  verifyParam(argv[2], &sensor.inter, 1);
-  verifyParam(argv[3], sensor.key, 0);
-  verifyParam(argv[4], &sensor.min, 1);
-  verifyParam(argv[5], &sensor.max, 1);
+  int inter, min, max, value;
 
-  if (sensor.min >= sensor.max) {
+  verifyParam(argv[1], sensor.id, 0);
+  verifyParam(argv[2], &inter, 1);
+  verifyParam(argv[3], sensor.key, 0);
+  verifyParam(argv[4], &min, 1);
+  verifyParam(argv[5], &max, 1);
+
+  if (min >= max) {
     printf("The minimum value must be less than the maximum value!\n");
     exit(EXIT_FAILURE);
   }
@@ -76,22 +70,14 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
     exit(EXIT_FAILURE);
   }
 
-  /* Register FIFO */
-  sprintf(buffer, ">%s#%s#%d#%d#%d", sensor.id, sensor.key, sensor.min, sensor.max, sensor.inter);
-  if (write(fifo, buffer, strlen(buffer)) == -1) {
-    perror("Error registering sensor");
-    close(fifo);
-    exit(EXIT_FAILURE);
-  }
-
   /* Send Data */
   struct timespec req, remaining;
-  req.tv_sec = sensor.inter;
+  req.tv_sec = inter;
   req.tv_nsec = 0;
   while(1) {
     if (nanosleep(&req, &remaining) == -1) req = remaining;
     else {
-      value = (rand() % (sensor.max - sensor.min + 1)) + sensor.min;
+      value = (rand() % (max - min + 1)) + min;
       sprintf(buffer, "%s#%s#%d", sensor.id, sensor.key, value); // ID_sensor#Key#Value
       #ifdef DEBUG
         printf("%s\n", buffer);
@@ -104,7 +90,7 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
       }
 
       count++;
-      req.tv_sec = sensor.inter; // reset the sleep time
+      req.tv_sec = inter; // reset the sleep time
     }
   }
 
