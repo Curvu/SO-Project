@@ -12,7 +12,8 @@
 struct sigaction act;
 pthread_t thread;
 int fifo, mqid, user_id;
-char buffer[MAX];
+char buffer[MAX], command[STR];
+Command cmd;
 
 void cleanup() {
   /* Send SIGINT to thread */
@@ -34,7 +35,7 @@ void ctrlc_handler(int signo) {
   }
 }
 
-void message_listener() { // this is a thread
+void message_listener() { // this is a thread that will listen to the message queue
   act.sa_handler = SIG_DFL; // default ctrl+c (not the handler)
   sigaction(SIGINT, &act, NULL);
 
@@ -59,8 +60,6 @@ int main(int argc, char **argv) {
     printf("User id must be greater than 0!\n");
     exit(EXIT_FAILURE);
   }
-
-  // TODO: check if user already exists
 
   #ifdef DEBUG
     printf("Hello, user %d!\n", user_id);
@@ -91,26 +90,26 @@ int main(int argc, char **argv) {
   }
 
   /* Main */
-  int val;
-  char command[MAX];
-  Command cmd;
   cmd.user = user_id;
   cmd.command = 0;
 
   while(1) {
-    scanf(" %s", command);
+    if (scanf(" %[^\n]", buffer) == EOF) {
+      printf(">> Invalid command!\n");
+      continue;
+    }
+    sscanf(buffer, " %s ", command);
+
     if (strcmp(command, "add_alert") == 0) { // <id> <key> <min> <max>
-      val = scanf(" %[^ ] %[^ ] %d %d", cmd.alert.id, cmd.alert.key, &cmd.alert.min, &cmd.alert.max);
-      if (val == 0 || val == EOF) {
-        printf(">> Invalid command!\n");
+      if (sscanf(buffer, " %*s %s %s %d %d", cmd.alert.id, cmd.alert.key, &cmd.alert.min, &cmd.alert.max) != 4) {
+        printf(">> Missing parameters!\n");
         continue;
       }
-      if (verifyID(cmd.alert.id) && verifyKey(cmd.alert.key)) cmd.command = 1;
+      if (verifyID(cmd.alert.id) && verifyKey(cmd.alert.key) && cmd.alert.min < cmd.alert.max) cmd.command = 1;
       else printf(">> Some invalid Parameter!!\n");
     } else if (strcmp(command, "remove_alert") == 0) { // <id>
-      val = scanf(" %[^\n]", cmd.alert.id);
-      if (val == 0 || val == EOF) {
-        printf(">> Invalid command!\n");
+      if (sscanf(buffer, " %*s %s", cmd.alert.id) != 1) {
+        printf(">> Missing parameter!\n");
         continue;
       }
       if (verifyID(cmd.alert.id)) cmd.command = 2;
