@@ -15,7 +15,6 @@
 #include <sys/stat.h>
 #include <sys/select.h>
 #include <sys/msg.h>
-#include <limits.h>
 #include "lib/functions.h"
 
 
@@ -38,7 +37,7 @@ typedef struct {
 } Mem_struct;
 
 Mem_struct * shm;
-int shmid;
+int shmid, mqid;
 
 /* Signal Actions */
 struct sigaction act; // main
@@ -50,7 +49,6 @@ int **pipes;
 /* Mutexes and Semaphores and Condition Variables */
 pthread_mutex_t BLOCK_QUEUE = PTHREAD_MUTEX_INITIALIZER;
 sem_t *BLOCK_LOGGER, *BLOCK_SHM, *WAIT_ALERT;
-
 
 /* Thread Sensor Reader */
 pthread_t sensor_reader;
@@ -80,9 +78,7 @@ typedef struct {
   Jobs *user; // User Console Thread
   Jobs *sensor; // Sensor Reader Thread
 } InternalQueue;
-
 InternalQueue queue;
-int mqid; // message queue id
 
 
 /* ----------------------------- */
@@ -112,9 +108,23 @@ void cleanup() {
   pthread_join(console_reader, NULL);
   pthread_join(dispatcher, NULL);
 
-  write_log(fp, "HOME_IOT SIMULATOR WAITING FOR LAST TASKS TO FINISH");
+  /* Print all jobs left in the queue */
+  if (queue.n > 0) {
+    char buffer[MAX];
+    int i = 0;
+    for (Jobs *aux = queue.sensor; aux; aux = aux->next) i++;
+    sprintf(buffer, "%d TASKS FOR SENSORS WERE NOT EXECUTED", i);
+    write_log(fp, buffer);
+
+    i = 0;
+    for (Jobs *aux = queue.user; aux; aux = aux->next) i++;
+    sprintf(buffer, "%d TASKS FOR USERS WERE NOT EXECUTED", i);
+    write_log(fp, buffer);
+  }
+
   /* Kill all processes */
   for (int i = 0; i < N_WORKERS + 1; i++) if (processes[i] > 0) kill(processes[i], SIGUSR2);
+  write_log(fp, "HOME_IOT SIMULATOR WAITING FOR LAST TASKS TO FINISH");
   for (int i = 0; i < N_WORKERS + 1; i++) wait(NULL);
 
   #ifdef DEBUG
@@ -199,7 +209,7 @@ void sigtstp_handler(int sig) { // ctrl + z
   }
 }
 
-void sigusr1_handler(int sig) { // to close threads
+void sigusr1_handler(int sig) { // Sginal to close threads
   if (sig == SIGUSR1) {
     close(fd_sensor);
     close(fd_user);
@@ -210,7 +220,7 @@ void sigusr1_handler(int sig) { // to close threads
   }
 }
 
-void sigusr2_handler(int sig) { // to close processes
+void sigusr2_handler(int sig) { // Signal to close processes
   if (sig == SIGUSR2) {
     #ifdef DEBUG
       printf("DEBUG >> SIGUSR2 RECEIVED\n"); fflush(stdout);
@@ -264,7 +274,6 @@ void worker(int num) {
         sprintf(log, "WORKER%d: ADD ALERT %s (%s %d TO %d) PROCESSING COMPLETED", num, c.alert.id, c.alert.key, c.alert.min, c.alert.max);
       } else if (c.command == 2) { /* Remove Alert */
         sem_wait(BLOCK_SHM);
-        printf("DEBUG >>>>>>>>>>>>>>>>>><< %s\n", c.alert.id);
         if ((i = searchAlert(shm->alerts, c.alert, MAX_ALERTS, 1)) != -1) { // found alert
           shm->alerts[i] = NULL_ALERT;
           strcpy(msg.response, "OK\n");
@@ -321,49 +330,32 @@ void worker(int num) {
       if (msgsnd(mqid, &msg, sizeof(Message) - sizeof(long), 0) < 0) handle_error_log(fp, "SENDING MESSAGE TO USER");
     } else { /* Job from sensor */
       Sensor s;
-      if (job.content[0] == '>') { /* Register Sensor */
-        sscanf(job.content, " >%[^#]#%[^#]#%d#%d#%d", s.id, s.key, &s.min, &s.max, &s.inter);
-
-        sem_wait(BLOCK_SHM);
-        if ((i = searchSensor(shm->sensors, NULL_SENSOR, MAX_SENSORS, 0)) != -1) {
-          shm->sensors[i] = s; // create sensor
-          /* Create key */
-          if (searchStat(shm->stats, s.key, MAX_KEYS) == -1) { // key doesn't exist
-            if ((i = searchStat(shm->stats, "", MAX_KEYS)) != -1) { // find empty key
-              strcpy(shm->stats[i].key, s.key); // create key
-              Stat *stat = &shm->stats[i];
-              stat->avg = 0;
-              stat->count = 0;
-              stat->last = 0;
-              stat->max = INT_MIN;
-              stat->min = INT_MAX;
-            } else write_log(fp, "KEY LIST IS FULL");
-          } else write_log(fp, "KEY ALREADY EXISTS");
-        } else write_log(fp, "SENSOR LIST IS FULL");
-        sem_post(BLOCK_SHM);
-        sprintf(log, "WORKER%d: REGISTER SENSOR %s PROCESSING COMPLETED", num, s.id);
-      } else if (job.content[0] == '<') { /* Remove Sensor */
-        sscanf(job.content, " <%[^#]#%[^#]", s.id, s.key);
-        sem_wait(BLOCK_SHM);
-        if((i = searchSensor(shm->sensors, s, MAX_SENSORS, 1)) != -1) shm->sensors[i] = NULL_SENSOR; // remove sensor
-        sem_post(BLOCK_SHM);
-        sprintf(log, "WORKER%d: REMOVE SENSOR %s PROCESSING COMPLETED", num, s.id);
-      } else { /* Update Key */
-        int val;
-        sscanf(job.content, " %[^#]#%[^#]#%d", s.id, s.key, &val);
-        sem_wait(BLOCK_SHM);
-        if ((searchSensor(shm->sensors, s, MAX_SENSORS, 1) != -1) && ((i = searchStat(shm->stats, s.key, MAX_KEYS)) != -1)) { // sensor exist (and key exist)
+      int val;
+      sscanf(job.content, " %[^#]#%[^#]#%d", s.id, s.key, &val);
+      sem_wait(BLOCK_SHM);
+      /* Sensor doesn't exist && there is space for new sensor */
+      if (((i = searchSensor(shm->sensors, s, MAX_SENSORS)) == -1) && ((i = searchSensor(shm->sensors, NULL_SENSOR, MAX_SENSORS)) != -1)) shm->sensors[i] = s; // create sensor
+      if (i != -1) { // sensor exist
+        if ((i = searchStat(shm->stats, s.key, MAX_KEYS)) != -1) { /* Key exist */
           Stat *stat = &shm->stats[i];
           stat->avg = (stat->avg * stat->count + val) / (stat->count + 1); // update average
           stat->count++;
           stat->last = val;
           if (val < stat->min) stat->min = val;
           if (val > stat->max) stat->max = val;
-        }
-        sem_post(BLOCK_SHM);
-        sem_post(WAIT_ALERT);
-        sprintf(log, "WORKER%d: %s DATA PROCESSING COMPLETED", num, s.key);
+        } else if ((i = searchStat(shm->stats, "", MAX_KEYS)) != -1) { /* Find empty key */
+          strcpy(shm->stats[i].key, s.key); // create key
+          Stat *stat = &shm->stats[i];
+          stat->avg = val;
+          stat->count = 1;
+          stat->last = val;
+          stat->max = val;
+          stat->min = val;
+        } // ignore if key list is full
       }
+      sem_post(BLOCK_SHM);
+      sem_post(WAIT_ALERT); // alert watcher to look for alerts
+      sprintf(log, "WORKER%d: %s DATA PROCESSING COMPLETED", num, s.key);
     }
     write_log(fp, log);
   }
@@ -537,16 +529,8 @@ void * dispatcher_func(void * param) {
         if (c == 6) sprintf(log, "DISPATCHER: RESET STATS SENT FOR PROCESSING ON WORKER %d", i+1);
       } else { /* From sensor */
         char id[STR], key[STR];
-        if (job.content[0] == '>') { // request to send data
-          sscanf(job.content, " >%[^#]#%[^#]#%*d#%*d#%*d", id, key);
-          sprintf(log, "DISPATCHER: REGISTER SENSOR %s SENT FOR PROCESSING ON WORKER %d", id, i+1);
-        } else if (job.content[0] == '<') {
-          sscanf(job.content, " <%[^#]#%[^#]", id, key);
-          sprintf(log, "DISPATCHER: REMOVE SENSOR %s SENT FOR PROCESSING ON WORKER %d", id, i+1);
-        } else {
-          sscanf(job.content, " %[^#]#%[^#]#%*d", id, key);
-          sprintf(log, "DISPATCHER: %s DATA (FROM %s SENSOR) SENT FOR PROCESSING ON WORKER %d", key, id, i+1);
-        }
+        sscanf(job.content, " %[^#]#%[^#]#%*d", id, key);
+        sprintf(log, "DISPATCHER: %s DATA (FROM %s SENSOR) SENT FOR PROCESSING ON WORKER %d", key, id, i+1);
       }
       write_log(fp, log);
 
@@ -561,13 +545,7 @@ void * dispatcher_func(void * param) {
 /*             Main              */
 /* ----------------------------- */
 int main(int argc, char **argv) {
-  unlink(USER_FIFO);
-  unlink(SENSOR_FIFO);
-  sem_unlink(MUTEX_LOGGER);
-  sem_unlink(MUTEX_SHM);
-  msgctl(msgget(MESSAGE_QUEUE_KEY, IPC_CREAT | 0666), IPC_RMID, NULL);
-
-
+  /* Handling arguments */
   if (argc != 2) handle_error("INVALID NUMBER OF ARGUMENTS");
   if ((fp = fopen(LOG_FILE, "a+")) == NULL) handle_error("OPENING LOG FILE");
 
@@ -576,8 +554,8 @@ int main(int argc, char **argv) {
   if (cfg == NULL) handle_error("OPENING CONFIG FILE");
 
   /* Read Config */
-  fscanf(cfg, "%d\n%d\n%d\n%d\n%d", &QUEUE_SZ, &N_WORKERS, &MAX_KEYS, &MAX_SENSORS, &MAX_ALERTS);
-  if (QUEUE_SZ < 1 || N_WORKERS < 1 || MAX_KEYS < 1 || MAX_SENSORS < 1 || MAX_ALERTS < 0) handle_error("INVALID CONFIG FILE");
+  if (fscanf(cfg, "%d\n%d\n%d\n%d\n%d", &QUEUE_SZ, &N_WORKERS, &MAX_KEYS, &MAX_SENSORS, &MAX_ALERTS) != 5) handle_error("INVALID CONFIG FILE");
+  if (QUEUE_SZ < 1 || N_WORKERS < 1 || MAX_KEYS < 1 || MAX_SENSORS < 1 || MAX_ALERTS < 0) handle_error("INVALID ARGUMENT IN CONFIG FILE");
   fclose(cfg);
 
   /* Signal (block all signals during setup) */
@@ -644,19 +622,19 @@ int main(int argc, char **argv) {
   /* Unnamed Pipes */
   pipes = (int **) malloc(N_WORKERS * sizeof(int *));
   for (int i = 0; i < N_WORKERS; i++) {
-    if ((pipes[i] = (int *) malloc(2 * sizeof(int))) == NULL) handle_error_log(fp, "ERROR >> ALLOCATING MEMORY");
-    if (pipe(pipes[i]) == -1) handle_error_log(fp, "ERROR >> CREATING PIPE");
+    if ((pipes[i] = (int *) malloc(2 * sizeof(int))) == NULL) handle_error_log(fp, "ALLOCATING MEMORY PIPES ARRAY");
+    if (pipe(pipes[i]) == -1) handle_error_log(fp, "CREATING PIPE");
   }
 
   printf("HOME_IOT SIMULATOR STARTING\n");
 
   /* Sensor Reader, Console Reader and Dispatcher */
-  if (pthread_create(&sensor_reader, NULL, sensor_reader_func, NULL) != 0) handle_error_log(fp, "ERROR >> CREATING SENSOR_READER");
-  if (pthread_create(&console_reader, NULL, console_reader_func, NULL) != 0) handle_error_log(fp, "ERROR >> CREATING CONSOLE_READER");
-  if (pthread_create(&dispatcher, NULL, dispatcher_func, NULL) != 0) handle_error_log(fp, "ERROR >> CREATING DISPATCHER");
+  if (pthread_create(&sensor_reader, NULL, sensor_reader_func, NULL) != 0) handle_error_log(fp, "CREATING SENSOR_READER");
+  if (pthread_create(&console_reader, NULL, console_reader_func, NULL) != 0) handle_error_log(fp, "CREATING CONSOLE_READER");
+  if (pthread_create(&dispatcher, NULL, dispatcher_func, NULL) != 0) handle_error_log(fp, "CREATING DISPATCHER");
 
   /* Processes */
-  if ((processes = (pid_t *) malloc((N_WORKERS + 1) * sizeof(pid_t))) == NULL) handle_error_log(fp, "ERROR >> ALLOCATING MEMORY");
+  if ((processes = (pid_t *) malloc((N_WORKERS + 1) * sizeof(pid_t))) == NULL) handle_error_log(fp, "ALLOCATING MEMORY PROCESS ARRAY");
   for (int i = 0; i < N_WORKERS+1; i++) {
     if ((processes[i] = fork()) == 0) {
       if (i != 0) worker(i); /* Workers */
