@@ -25,6 +25,7 @@
 #define MUTEX_SHM "/mutex_shared_memory"
 #define MUTEX_LOGGER "/mutex_logger"
 #define MUTEX_ALERT "/mutex_alert"
+#define MUTEX_WORKER "/mutex_worker"
 int QUEUE_SZ, N_WORKERS, MAX_KEYS, MAX_SENSORS, MAX_ALERTS;
 FILE *fp;
 
@@ -44,11 +45,16 @@ struct sigaction act; // main
 
 /* Workers */
 pid_t *processes;
-int **pipes;
+typedef struct {
+  int rw[2];
+} Pipe;
+Pipe *pipes;
 
 /* Mutexes and Semaphores and Condition Variables */
 pthread_mutex_t BLOCK_QUEUE = PTHREAD_MUTEX_INITIALIZER;
-sem_t *BLOCK_LOGGER, *BLOCK_SHM, *WAIT_ALERT;
+pthread_mutex_t MUTEX_Q = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t COND_QUEUE = PTHREAD_COND_INITIALIZER;
+sem_t *BLOCK_LOGGER, *BLOCK_SHM, *WAIT_ALERT, *MUTEX;
 
 /* Thread Sensor Reader */
 pthread_t sensor_reader;
@@ -101,40 +107,45 @@ void write_log(FILE *fp, char * content) {
 /* ----------------------------- */
 void cleanup() {
   /* Remove Threads */
-  pthread_kill(sensor_reader, SIGUSR1);
-  pthread_kill(console_reader, SIGUSR1);
-  pthread_kill(dispatcher, SIGUSR1);
-  pthread_join(sensor_reader, NULL);
-  pthread_join(console_reader, NULL);
-  pthread_join(dispatcher, NULL);
+  if (sensor_reader != 0 && pthread_kill(sensor_reader, SIGUSR1) != 0) printf("Error while canceling sensor reader thread\n");
+  if (console_reader != 0 && pthread_kill(console_reader, SIGUSR1) != 0)  printf("Error while canceling user console reader thread\n");
+  if (dispatcher != 0 && pthread_kill(dispatcher, SIGUSR1) != 0)  printf("Error while canceling dispatcher thread\n");
+  if (sensor_reader != 0 && pthread_join(sensor_reader, NULL) != 0) printf("Error while joining sensor reader thread\n");
+  if (console_reader != 0 && pthread_join(console_reader, NULL) != 0) printf("Error while joining user console reader thread\n");
+  if (dispatcher != 0 && pthread_join(dispatcher, NULL) != 0) printf("Error while joining dispatcher thread\n");
 
   /* Print all jobs left in the queue */
   if (queue.n > 0) {
     char buffer[MAX];
     int i = 0;
     for (Jobs *aux = queue.sensor; aux; aux = aux->next) i++;
-    sprintf(buffer, "%d TASKS FOR SENSORS WERE NOT EXECUTED", i);
+    sprintf(buffer, "%d TASKS FROM SENSORS WERE NOT EXECUTED", i);
     write_log(fp, buffer);
 
     i = 0;
     for (Jobs *aux = queue.user; aux; aux = aux->next) i++;
-    sprintf(buffer, "%d TASKS FOR USERS WERE NOT EXECUTED", i);
+    sprintf(buffer, "%d TASKS FROM USERS WERE NOT EXECUTED", i);
     write_log(fp, buffer);
   }
 
   /* Kill all processes */
-  for (int i = 0; i < N_WORKERS + 1; i++) if (processes[i] > 0) kill(processes[i], SIGUSR2);
-  write_log(fp, "HOME_IOT SIMULATOR WAITING FOR LAST TASKS TO FINISH");
-  for (int i = 0; i < N_WORKERS + 1; i++) wait(NULL);
+  if (processes)
+    for (int i = 0; i < N_WORKERS + 1; i++) if ((processes[i] > 0) && (kill(processes[i], SIGUSR2) != 0)) printf("Error while killing process");
+  if (fp) write_log(fp, "HOME_IOT SIMULATOR WAITING FOR LAST TASKS TO FINISH");
+  while (wait(NULL) > 0) {}
 
   #ifdef DEBUG
     printf("DEBUG >> All threads and processes deleted!\n");
   #endif
 
   /* Remove shared memory */
-  if (shmid > 0) {
-    shmctl(shmid, IPC_RMID, NULL); // remove the shared memory
-    shmdt(shm); // dettach from the shared memory
+  if (shmctl(shmid, IPC_RMID, NULL) != 0) {
+    if (errno == EINVAL) printf("No shared memory or might be an error\n");
+    else printf("Error while removing shared memory\n");
+  }
+  if (shmdt(shm) != 0) {
+    if (errno == EINVAL) printf("No shared memory or might be an error\n");
+    else printf("Error while detaching shared memory\n");
   }
 
   /* Close log file */
@@ -144,25 +155,74 @@ void cleanup() {
   }
 
   /* Remove Semaphores and Mutexes and Condition Variables */
-  sem_close(BLOCK_LOGGER);
-  sem_unlink(MUTEX_LOGGER);
-  sem_close(BLOCK_SHM);
-  sem_unlink(MUTEX_SHM);
-  pthread_mutex_destroy(&BLOCK_QUEUE);
-  sem_close(WAIT_ALERT);
-  sem_unlink(MUTEX_ALERT);
+  if (sem_close(MUTEX) != 0) {
+    if (errno == EINVAL) printf("No semaphore named MUTEX\n");
+    else printf("Error while closing semaphore MUTEX\n");
+  }
+  if (sem_close(BLOCK_LOGGER) != 0) {
+    if (errno == EINVAL) printf("No semaphore named BLOCK_LOGGER\n");
+    else printf("Error while closing semaphore BLOCK_LOGGER\n");
+  }
+  if (sem_close(BLOCK_SHM) != 0) {
+    if (errno == EINVAL) printf("No semaphore named BLOCK_SHM\n");
+    else printf("Error while closing semaphore BLOCK_SHM\n");
+  }
+  if (sem_close(WAIT_ALERT) != 0) {
+    if (errno == EINVAL) printf("No semaphore named WAIT_ALERT\n");
+    else printf("Error while closing semaphore WAIT_ALERT\n");
+  }
+
+  if (sem_unlink(MUTEX_WORKER) != 0) {
+    if (errno == ENOENT) printf("No semaphore named MUTEX_WORKER\n");
+    else printf("Error while unlinking semaphore MUTEX_WORKER\n");
+  }
+  if (sem_unlink(MUTEX_LOGGER) != 0) {
+    if (errno == ENOENT) printf("No semaphore named MUTEX_LOGGER\n");
+    else printf("Error while unlinking semaphore MUTEX_LOGGER\n");
+  }
+  if (sem_unlink(MUTEX_SHM) != 0) {
+    if (errno == ENOENT) printf("No semaphore named MUTEX_SHM\n");
+    else printf("Error while unlinking semaphore MUTEX_SHM\n");
+  }
+  if (sem_unlink(MUTEX_ALERT) != 0) {
+    if (errno == ENOENT) printf("No semaphore named MUTEX_ALERT\n");
+    else printf("Error while unlinking semaphore MUTEX_ALERT\n");
+  }
+  if (pthread_mutex_destroy(&BLOCK_QUEUE) != 0) {
+    if (errno == EINVAL) printf("No mutex named BLOCK_QUEUE\n");
+    else printf("Error while destroying mutex BLOCK_QUEUE\n");
+  }
+  if (pthread_mutex_destroy(&MUTEX_Q) != 0) {
+    if (errno == EINVAL) printf("No mutex named MUTEX_Q\n");
+    else printf("Error while destroying mutex MUTEX_Q\n");
+  }
+  if (pthread_cond_destroy(&COND_QUEUE) != 0) {
+    if (errno == EINVAL) printf("No condition variable named COND_QUEUE\n");
+    else printf("Error while destroying condition variable COND_QUEUE\n");
+  }
 
   /* Remove FIFO's */
-  unlink(SENSOR_FIFO);
-  unlink(USER_FIFO);
+  if (unlink(SENSOR_FIFO) != 0) printf("Error while unlinking fifo\n");
+  if (unlink(USER_FIFO) != 0) printf("Error while unlinking fifo\n");
 
   /* Remove Message Queue */
-  msgctl(mqid, IPC_RMID, NULL);
+  if (msgctl(mqid, IPC_RMID, NULL) != 0) {
+    if (errno == EINVAL) printf("No message queue\n");
+    else printf("Error while removing message queue\n");
+  }
 
   /* Close all unnamed pipes */
   for (int i = 0; i < N_WORKERS; i++) {
-    close(pipes[i][0]);
-    close(pipes[i][1]);
+    if (pipes) {
+      if (close(pipes[i].rw[0]) != 0) {
+        if (errno == EBADF || errno == EIO) printf("No pipe named pipes[%d].rw[0]\n", i);
+        else printf("Error while closing pipe\n");
+      }
+      if (close(pipes[i].rw[1]) != 0) {
+        if (errno == EBADF || errno == EIO) printf("No pipe named pipes[%d].rw[1]\n", i);
+        else printf("Error while closing pipe\n");
+      }
+    } else break;
   }
 
   /* Exit */
@@ -205,6 +265,7 @@ void sigtstp_handler(int sig) { // ctrl + z
     write_log(fp, "SIGTSTP RECEIVED");
     #ifdef DEBUG
       printf("DEBUG >> %d workers available 🧌\n", sum_array(shm->workers, N_WORKERS)); fflush(stdout);
+      printf("DEBUG >> %d jobs in queue\n", queue.n);
     #endif
   }
 }
@@ -239,9 +300,9 @@ void worker(int num) {
 
   Job job;
   Message msg; // message to send to user (message queue)
-
-  int i, fd = pipes[num-1][0];
+  int i, fd = pipes[num-1].rw[0];
   fd_set set;
+
   while(1) {
     // set signal handler for sigusr2
     act.sa_handler = sigusr2_handler;
@@ -249,19 +310,23 @@ void worker(int num) {
 
     // Worker is ready to receive job
     write_log(fp, buffer);
-    shm->workers[num-1] = 1; // worker is available
 
     // wait for job
     FD_ZERO(&set);
     FD_SET(fd, &set);
+
+    // send notification to shm->cond
+    shm->workers[num-1] = 1; // worker is available
+    sem_post(MUTEX);
+
     select(fd+1, &set, NULL, NULL, NULL);
     // block signal handler
     act.sa_handler = SIG_IGN;
     sigaction(SIGUSR2, &act, NULL);
-    if (read(pipes[num-1][0], &job, sizeof(Job)) < 0) handle_error_log(fp, "READING FROM PIPE");
+    if (read(fd, &job, sizeof(Job)) < 0) handle_error_log(fp, "READING FROM PIPE");
 
     //* start job
-    if (job.type) { /* Job from user */
+    if (job.type == 1) { /* Job from user */
       Command c = job.cmd;
       msg.type = c.user;
       if (c.command == 1) { /* Add Alert */
@@ -328,7 +393,7 @@ void worker(int num) {
 
       /* Send response to user */
       if (msgsnd(mqid, &msg, sizeof(Message) - sizeof(long), 0) < 0) handle_error_log(fp, "SENDING MESSAGE TO USER");
-    } else { /* Job from sensor */
+    } else if (job.type == 0) { /* Job from sensor */
       Sensor s;
       int val;
       sscanf(job.content, " %[^#]#%[^#]#%d", s.id, s.key, &val);
@@ -358,6 +423,7 @@ void worker(int num) {
       sprintf(log, "WORKER%d: %s DATA PROCESSING COMPLETED", num, s.key);
     }
     write_log(fp, log);
+    job.type = -1; // job is done (just to be sure)
   }
 }
 
@@ -412,12 +478,12 @@ Jobs * create_job(Jobs* jobs, Job job) {
   return new;
 }
 
-void remove_job(Jobs **jobs) {
-  if (*jobs == NULL) return; // empty list
-  Jobs *aux = *jobs;
-  *jobs = aux->next;
-  free(aux); // free memory of the old head node
+Jobs * pop_job(Jobs *jobs) {
+  if (jobs == NULL) return NULL;
+  Jobs *aux = jobs->next;
+  free(jobs);
   queue.n--;
+  return aux; // return new head
 }
 
 
@@ -438,26 +504,39 @@ void * sensor_reader_func(void * param) {
     FD_ZERO(&set);
     FD_SET(fd_sensor, &set);
 
+    /* Reenable signal handler for sigusr1 */
+    act.sa_handler = sigusr1_handler;
+    sigaction(SIGUSR1, &act, NULL);
+
     if (select(fd_sensor + 1, &set, NULL, NULL, NULL) < 0) handle_error_log(fp, "select sensor fifo");
     if ((size = read(fd_sensor, job.content, MAX)) < 0) handle_error_log(fp, "read sensor fifo");
     job.content[size] = '\0';
 
     #ifdef DEBUG
-      printf("DEBUG >> Sensor Reader: %s\n", job.content);
+      // printf("DEBUG >> Sensor Reader: %s\n", job.content);
     #endif
+
+    /* Block signal handler for sigusr1 */
+    act.sa_handler = SIG_IGN;
+    sigaction(SIGUSR1, &act, NULL);
 
     /* Send job to queue */
     pthread_mutex_lock(&BLOCK_QUEUE);
     if (queue.n < QUEUE_SZ) queue.sensor = create_job(queue.sensor, job);
-    else write_log(fp, "QUEUE IS FULL");
+    // else write_log(fp, "QUEUE IS FULL");
     pthread_mutex_unlock(&BLOCK_QUEUE);
+
+    /* Send signal to dispatcher */
+    pthread_mutex_lock(&MUTEX_Q);
+    pthread_cond_signal(&COND_QUEUE);
+    pthread_mutex_unlock(&MUTEX_Q);
   }
 }
 
 void * console_reader_func(void * param) {
   write_log(fp, "THREAD CONSOLE_READER CREATED");
 
-  // open pipe
+  /* Open pipe */
   if ((fd_user = open(USER_FIFO, O_RDWR)) < 0) handle_error_log(fp, "open user fifo");
 
   Command cmd;
@@ -471,72 +550,97 @@ void * console_reader_func(void * param) {
     FD_ZERO(&set);
     FD_SET(fd_user, &set);
 
+    /* Reenable signal handler for sigusr1 */
+    act.sa_handler = sigusr1_handler;
+    sigaction(SIGUSR1, &act, NULL);
+
     if (select(fd_user + 1, &set, NULL, NULL, NULL) < 0) handle_error_log(fp, "select user fifo");
+
+    /* Block signal handler for sigusr1 */
+    act.sa_handler = SIG_IGN;
+    sigaction(SIGUSR1, &act, NULL);
+
     if ((size = read(fd_user, &cmd, sizeof(Command))) < 0) handle_error_log(fp, "read user fifo");
     job.cmd = cmd;
 
     /* Send job to queue */
     pthread_mutex_lock(&BLOCK_QUEUE);
     if (queue.n < QUEUE_SZ) queue.user = create_job(queue.user, job);
-    else write_log(fp, "QUEUE IS FULL");
+    else write_log(fp, "QUEUE IS FULL\n");
     pthread_mutex_unlock(&BLOCK_QUEUE);
+
+    /* Send signal to dispatcher */
+    pthread_mutex_lock(&MUTEX_Q);
+    pthread_cond_signal(&COND_QUEUE);
+    pthread_mutex_unlock(&MUTEX_Q);
   }
 }
 
 void * dispatcher_func(void * param) {
   write_log(fp, "THREAD DISPATCHER CREATED");
   Job job;
-  job.type = -1;
   char log[MAX];
+  int i;
 
   while (1) {
-    // get job from queue
-    if (job.type == -1) {
-      pthread_mutex_lock(&BLOCK_QUEUE);
-      if (queue.n > 0) {
-        if (queue.user != NULL) {
-          job = queue.user->job;
-          remove_job(&queue.user);
-        } else if (queue.sensor != NULL) {
-          job = queue.sensor->job;
-          remove_job(&queue.sensor);
-        }
-      }
-      pthread_mutex_unlock(&BLOCK_QUEUE);
+    /* Wait for queue to be available */
+    pthread_mutex_lock(&MUTEX_Q);
+    while (queue.n < 1) pthread_cond_wait(&COND_QUEUE, &MUTEX_Q);
+    pthread_mutex_unlock(&MUTEX_Q);
+
+    /* Get job from queue */
+    pthread_mutex_lock(&BLOCK_QUEUE);
+    if (queue.user != NULL) {
+      job = queue.user->job;
+      queue.user = pop_job(queue.user);
+    } else if (queue.sensor != NULL) {
+      job = queue.sensor->job;
+      queue.sensor = pop_job(queue.sensor);
+    }
+    pthread_mutex_unlock(&BLOCK_QUEUE);
+
+    /* Wait for worker to be available */
+    while (sum_array(shm->workers, N_WORKERS) == 0) {
+      sem_wait(MUTEX);
     }
 
-    // check if there is a message to send and if there is a worker available
-    if (job.type != -1 && sum_array(shm->workers, N_WORKERS) > 0) {
-      // find the available worker
-      int i;
-      for (i = 0; i < N_WORKERS; i++) if (shm->workers[i]) break;
-      shm->workers[i] = 0; // set worker to busy
-      
-      // send job to worker - pipe
-      #ifdef DEBUG
-        printf("DEBUG >> Sending job to worker %d!\n", i+1);
-      #endif
+    /* Find the available worker */
+    sem_wait(BLOCK_SHM);
+    for (i = 0; i < N_WORKERS; i++) if (shm->workers[i]) break;
+    shm->workers[i] = 0; // set worker to busy
+    sem_post(BLOCK_SHM);
 
-      
-      if (job.type) { /* From user */
-        int c = job.cmd.command;
-        Alert a = job.cmd.alert;
-        if (c == 1) sprintf(log, "DISPATCHER: ADD ALERT %s (%s %d TO %d) SENT FOR PROCESSING ON WORKER %d", a.id, a.key, a.min, a.max, i+1);
-        if (c == 2) sprintf(log, "DISPATCHER: REMOVE ALERT %s SENT FOR PROCESSING ON WORKER %d", a.id, i+1);
-        if (c == 3) sprintf(log, "DISPATCHER: LIST ALERTS SENT FOR PROCESSING ON WORKER %d", i+1);
-        if (c == 4) sprintf(log, "DISPATCHER: LIST ACTIVE SENSORS SENT FOR PROCESSING ON WORKER %d", i+1);
-        if (c == 5) sprintf(log, "DISPATCHER: LIST STATS SENT FOR PROCESSING ON WORKER %d", i+1);
-        if (c == 6) sprintf(log, "DISPATCHER: RESET STATS SENT FOR PROCESSING ON WORKER %d", i+1);
-      } else { /* From sensor */
-        char id[STR], key[STR];
-        sscanf(job.content, " %[^#]#%[^#]#%*d", id, key);
-        sprintf(log, "DISPATCHER: %s DATA (FROM %s SENSOR) SENT FOR PROCESSING ON WORKER %d", key, id, i+1);
-      }
-      write_log(fp, log);
+    #ifdef DEBUG
+      printf("DEBUG >> Sending job to worker %d!\n", i+1);
+    #endif
 
-      write(pipes[i][1], &job, sizeof(Job));
-      job.type = -1;
+    /* Block signal handler for sigusr1 */
+    act.sa_handler = SIG_IGN;
+    sigaction(SIGUSR1, &act, NULL);
+
+    /* Send job to the worker's pipe */
+    if (job.type) { /* From user */
+      int c = job.cmd.command;
+      Alert a = job.cmd.alert;
+      if (c == 1) sprintf(log, "DISPATCHER: ADD ALERT %s (%s %d TO %d) SENT FOR PROCESSING ON WORKER %d", a.id, a.key, a.min, a.max, i+1);
+      if (c == 2) sprintf(log, "DISPATCHER: REMOVE ALERT %s SENT FOR PROCESSING ON WORKER %d", a.id, i+1);
+      if (c == 3) sprintf(log, "DISPATCHER: LIST ALERTS SENT FOR PROCESSING ON WORKER %d", i+1);
+      if (c == 4) sprintf(log, "DISPATCHER: LIST ACTIVE SENSORS SENT FOR PROCESSING ON WORKER %d", i+1);
+      if (c == 5) sprintf(log, "DISPATCHER: LIST STATS SENT FOR PROCESSING ON WORKER %d", i+1);
+      if (c == 6) sprintf(log, "DISPATCHER: RESET STATS SENT FOR PROCESSING ON WORKER %d", i+1);
+    } else if (job.type == 0) { /* From sensor */
+      char id[STR], key[STR];
+      sscanf(job.content, " %[^#]#%[^#]#%*d", id, key);
+      sprintf(log, "DISPATCHER: %s DATA (FROM %s SENSOR) SENT FOR PROCESSING ON WORKER %d", key, id, i+1);
     }
+    write_log(fp, log);
+    write(pipes[i].rw[1], &job, sizeof(Job));
+
+    job.type = -1;
+
+    /* Reenable signal handler for sigusr1 */
+    act.sa_handler = sigusr1_handler;
+    sigaction(SIGUSR1, &act, NULL);
   }
 }
 
@@ -575,13 +679,15 @@ int main(int argc, char **argv) {
   sigaction(SIGUSR2, &act, NULL); // to close threads
 
   /* Semaphores */
-  if ((BLOCK_SHM = sem_open(MUTEX_SHM, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_SHM SEMAPHORE");          // block when someone is using the shared memory
+  sem_unlink(MUTEX_LOGGER);
   if ((BLOCK_LOGGER = sem_open(MUTEX_LOGGER, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_LOGGER SEMAPHORE"); // block when someone is using the log file
-  if ((WAIT_ALERT = sem_open(MUTEX_ALERT, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING WAIT_ALERT SEMAPHORE");       // block when someone is using the alerts array
+  if ((BLOCK_SHM = sem_open(MUTEX_SHM, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING BLOCK_SHM SEMAPHORE");          // block when someone is using the shared memory
+  if ((WAIT_ALERT = sem_open(MUTEX_ALERT, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING WAIT_ALERT SEMAPHORE");       // block when someone is using the alerts array
+  if ((MUTEX = sem_open(MUTEX_WORKER, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING MUTEX_WORKER SEMAPHORE");       // block when someone is using the workers array
 
   /* Create FIFO's */
-  if (mkfifo(SENSOR_FIFO, 0666) == -1) handle_error("CREATING SENSOR FIFO");
-  if (mkfifo(USER_FIFO, 0666) == -1) handle_error("CREATING USER FIFO");
+  if (mkfifo(SENSOR_FIFO, 0666) == -1) handle_error_log(fp, "CREATING SENSOR FIFO");
+  if (mkfifo(USER_FIFO, 0666) == -1) handle_error_log(fp, "CREATING USER FIFO");
 
   /* Main */
   write_log(fp, "HOME_IOT SIMULATOR STARTING");
@@ -610,7 +716,7 @@ int main(int argc, char **argv) {
   #endif
   
   /* Message Queue */
-  if ((mqid = msgget(MESSAGE_QUEUE_KEY, IPC_CREAT | IPC_EXCL | 0666)) == -1) handle_error_log(fp, "CREATING MESSAGE QUEUE");
+  if ((mqid = msgget(MESSAGE_QUEUE_KEY, IPC_CREAT | 0666)) == -1) handle_error_log(fp, "CREATING MESSAGE QUEUE");
 
   /* Initialize Queue */
   queue.n = 0;
@@ -620,10 +726,9 @@ int main(int argc, char **argv) {
   #endif
 
   /* Unnamed Pipes */
-  pipes = (int **) malloc(N_WORKERS * sizeof(int *));
+  pipes = (Pipe*) malloc(N_WORKERS*sizeof(Pipe));
   for (int i = 0; i < N_WORKERS; i++) {
-    if ((pipes[i] = (int *) malloc(2 * sizeof(int))) == NULL) handle_error_log(fp, "ALLOCATING MEMORY PIPES ARRAY");
-    if (pipe(pipes[i]) == -1) handle_error_log(fp, "CREATING PIPE");
+    if (pipe(pipes[i].rw) == -1) handle_error_log(fp, "CREATING UNNAMED PIPE");
   }
 
   printf("HOME_IOT SIMULATOR STARTING\n");
@@ -652,5 +757,5 @@ int main(int argc, char **argv) {
   act.sa_handler = sigusr1_handler;
   sigaction(SIGUSR1, &act, NULL);
 
-  while(1) pause(); // wait for SIGINT
+  while(1) pause(); // wait for signals (no busy waiting)
 }
