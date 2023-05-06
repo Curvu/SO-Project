@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#include <errno.h>
 #include "lib/functions.h"
 
 Sensor sensor;
@@ -28,7 +29,11 @@ void ctrlz_handler(int signo) {
 void ctrlc_handler(int signo) {
   printf("\n>> Messages sent: %d\n", count);
   cleanup();
-  exit(0);
+}
+
+void sigpipe_handler(int signo) {
+  printf("\n>> Messages sent: %d\n", count);
+  cleanup();
 }
 
 int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <valor min> <valor maximo>
@@ -53,6 +58,10 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
     printf("The minimum value must be less than the maximum value!\n");
     exit(EXIT_FAILURE);
   }
+  if (inter <= 0) {
+    printf("The interval must be greater than 0!\n");
+    exit(EXIT_FAILURE);
+  }
 
   srand(time(NULL));
 
@@ -63,6 +72,8 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
   sigaction(SIGTSTP, &act, NULL);
   act.sa_handler = ctrlc_handler;
   sigaction(SIGINT, &act, NULL);
+  act.sa_handler = sigpipe_handler;
+  sigaction(SIGPIPE, &act, NULL);
 
   /* Open FIFO */
   if ((fifo = open(SENSOR_FIFO, O_WRONLY)) == -1) {
