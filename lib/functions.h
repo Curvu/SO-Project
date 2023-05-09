@@ -1,18 +1,22 @@
 #ifndef FUNCTIONS_H
 #define FUNCTIONS_H
+#include <stdbool.h>
 
 #define DEBUG
 
+#define MUTEX_SENSOR "/mutex_sensor"
 #define MESSAGE_QUEUE_KEY 13579
-
 #define BUFFER 2048
 #define MAX 200
 #define STR 33
 
+
 typedef struct {
   char key[STR];
-  int last, min, max, count;
+  int last, min, max;
+  unsigned int count;
   double avg;
+  bool checked;
 } Stat;
 
 typedef struct {
@@ -37,7 +41,7 @@ typedef struct {
 
 #define NULL_SENSOR (Sensor) { "", "" }
 #define NULL_ALERT (Alert) { "", "", 0, 0, 0 }
-#define NULL_STAT (Stat) {"", 0, 0, 0, 0, 0 }
+#define NULL_STAT (Stat) {"", 0, 0, 0, 0, 0, false}
 
 #define SENSOR_FIFO "sensor_fifo"
 #define USER_FIFO "user_fifo"
