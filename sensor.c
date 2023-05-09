@@ -7,17 +7,24 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <errno.h>
+#include <semaphore.h>
 #include "lib/functions.h"
 
 Sensor sensor;
 int count = 0;
 int fifo;
 char buffer[MAX];
+sem_t * BLOCK_SENSOR;
 
 struct sigaction act;
 
 void cleanup() {
   /* Close FIFO */
+  if (sem_close(BLOCK_SENSOR) != 0) {
+    if (errno != EINVAL) printf("No semaphore named BLOCK_SENSOR\n");
+    else printf("Errno while closing semaphore WAIT_ALERT\n");
+  }
+
   close(fifo);
   exit(0);
 }
@@ -58,8 +65,8 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
     printf("The minimum value must be less than the maximum value!\n");
     exit(EXIT_FAILURE);
   }
-  if (inter <= 0) {
-    printf("The interval must be greater than 0!\n");
+  if (inter < 0) {
+    printf("The interval must be greater or equal than 0!\n");
     exit(EXIT_FAILURE);
   }
 
@@ -74,6 +81,12 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
   sigaction(SIGINT, &act, NULL);
   act.sa_handler = sigpipe_handler;
   sigaction(SIGPIPE, &act, NULL);
+
+  /* Connect to Semaphore */
+  if ((BLOCK_SENSOR = sem_open(MUTEX_SENSOR, O_EXCL , 0666, 1)) == SEM_FAILED) {
+    perror("sem_open");
+    exit(EXIT_FAILURE);
+  }
 
   /* Open FIFO */
   if ((fifo = open(SENSOR_FIFO, O_WRONLY)) == -1) {
@@ -94,7 +107,8 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
         printf("%s\n", buffer);
       #endif
 
-      if (write(fifo, buffer, strlen(buffer)) == -1) {
+      sem_wait(BLOCK_SENSOR);
+      if (write(fifo, buffer, MAX) == -1) {
         perror("Error writing to FIFO");
         close(fifo);
         exit(EXIT_FAILURE);
