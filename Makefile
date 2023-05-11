@@ -4,7 +4,7 @@ FLAGS = -Wall -g -pthread -D_REENTRANT
 
 # Source Files
 SRCS = user_console.c sensor.c # list of source files
-OBJS = $(SRCS:%.c=$(OUTPUT_DIR)/%.o) $(OUTPUT_DIR)/functions.o $(OUTPUT_DIR)/iq.o $(OUTPUT_DIR)/sys_manager.o
+OBJS = $(SRCS:%.c=$(OUTPUT_DIR)/%.o) $(OUTPUT_DIR)/sys_manager.o
 
 # Targets
 .PHONY: all clean
@@ -25,15 +25,9 @@ $(OUTPUT_DIR):
 $(OUTPUT_DIR)/%.o: %.c
 	gcc $(FLAGS) -c $^ -o $@
 
-$(OUTPUT_DIR)/functions.o: ./lib/functions.c ./lib/functions.h
-	gcc -c ./lib/functions.c -o $@
-
-$(OUTPUT_DIR)/iq.o: ./lib/internal_queue.h
-	gcc -c ./lib/internal_queue.h -o $@
-
 # Executables
-$(OUTPUT_DIR)/%: $(OUTPUT_DIR)/%.o $(OUTPUT_DIR)/functions.o
+$(OUTPUT_DIR)/%: $(OUTPUT_DIR)/%.o
 	gcc $(FLAGS) $^ -o $@
 
-$(OUTPUT_DIR)/home_iot: $(OUTPUT_DIR)/sys_manager.o $(OUTPUT_DIR)/functions.o
+$(OUTPUT_DIR)/home_iot: $(OUTPUT_DIR)/sys_manager.o
 	gcc $(FLAGS) $^ -o $@
