@@ -1,3 +1,10 @@
+/**
+ * @file functions.h
+ * @authors
+ * - Filipe Rodrigues (2021218054)
+ * - Joás Silva (2021226149)
+ */
+
 #ifndef FUNCTIONS_H
 #define FUNCTIONS_H
 #include <stdbool.h>

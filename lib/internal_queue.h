@@ -1,3 +1,10 @@
+/**
+ * @file internal_queue.h
+ * @authors
+ * - Filipe Rodrigues (2021218054)
+ * - Joás Silva (2021226149)
+ */
+
 #ifndef INTERNALQUEUE_H
 #define INTERNALQUEUE_H
 

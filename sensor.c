@@ -1,3 +1,10 @@
+/**
+ * @file sensor.c
+ * @authors
+ * - Filipe Rodrigues (2021218054)
+ * - Joás Silva (2021226149)
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,10 +61,11 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
   #endif
 
   int inter, min, max, value;
+  char key[STR];
 
   verifyParam(argv[1], sensor.id, 0);
   verifyParam(argv[2], &inter, 1);
-  verifyParam(argv[3], sensor.key, 0);
+  verifyParam(argv[3], key, 0);
   verifyParam(argv[4], &min, 1);
   verifyParam(argv[5], &max, 1);
 
@@ -102,7 +110,7 @@ int main(int argc, char **argv) { //$ sensor <identifier> <intervalo> <key> <val
     if (nanosleep(&req, &remaining) == -1) req = remaining;
     else {
       value = (rand() % (max - min + 1)) + min;
-      sprintf(buffer, "%s#%s#%d", sensor.id, sensor.key, value); // ID_sensor#Key#Value
+      sprintf(buffer, "%s#%s#%d", sensor.id, key, value); // ID_sensor#Key#Value
       #ifdef DEBUG
         printf("%s\n", buffer);
       #endif

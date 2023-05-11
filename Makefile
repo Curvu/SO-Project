@@ -1,3 +1,6 @@
+#* - Filipe Rodrigues (2021218054)
+#* - Joás Silva (2021226149)
+
 # Flags
 OUTPUT_DIR = bin
 FLAGS = -Wall -g -pthread -D_REENTRANT

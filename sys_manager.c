@@ -1,3 +1,10 @@
+/**
+ * @file sys_manager.c
+ * @authors
+ * - Filipe Rodrigues (2021218054)
+ * - Joás Silva (2021226149)
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <signal.h>
@@ -540,7 +547,7 @@ void * console_reader_func(void * param) {
 
     /* Send job to queue */
     pthread_mutex_lock(&BLOCK_QUEUE);
-    while (queue->n >= QUEUE_SZ) pthread_cond_wait(&PRIO_QUEUE, &BLOCK_QUEUE); // wait for queue to be available
+    while (queue->n == QUEUE_SZ) pthread_cond_wait(&PRIO_QUEUE, &BLOCK_QUEUE); // wait for queue to be available
     pthread_mutex_unlock(&BLOCK_QUEUE);
     addJob(queue, job);
 
@@ -560,7 +567,7 @@ void * dispatcher_func(void * param) {
   while (1) {
     /* Wait for queue to be available */
     pthread_mutex_lock(&MUTEX_Q);
-    while (queue->n < 1) pthread_cond_wait(&COND_QUEUE, &MUTEX_Q);
+    while (queue->n == 0) pthread_cond_wait(&COND_QUEUE, &MUTEX_Q);
     pthread_mutex_unlock(&MUTEX_Q);
 
     /* Get job from queue */

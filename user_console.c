@@ -1,3 +1,10 @@
+/**
+ * @file user_console.c
+ * @authors
+ * - Filipe Rodrigues (2021218054)
+ * - Joás Silva (2021226149)
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,6 +99,15 @@ int main(int argc, char **argv) {
   /* Main */
   cmd.user = user_id;
   cmd.command = 0;
+
+  printf(">> Commands:\n");
+  printf("> add_alert <id> <key> <min> <max>\n");
+  printf("> remove_alert <id>\n");
+  printf("> list_alerts\n");
+  printf("> sensors\n");
+  printf("> stats\n");
+  printf("> reset\n");
+  printf("> exit\n");
 
   while(1) {
     if (scanf(" %[^\n]", buffer) == EOF) {
