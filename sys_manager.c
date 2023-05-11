@@ -164,7 +164,7 @@ void cleanup() {
   }
   if (sem_close(BLOCK_SENSOR) != 0) {
     if (errno != EINVAL) printf("No semaphore named BLOCK_SENSOR\n");
-    else printf("Errno while closing semaphore WAIT_ALERT\n");
+    else printf("Errno while closing semaphore BLOCK_SENSOR\n");
   }
   if (sem_close(DISP) != 0) {
     if (errno == EINVAL) printf("No semaphore named DISP\n");
@@ -213,8 +213,8 @@ void cleanup() {
     else printf("Error while destroying condition variable COND_QUEUE\n");
   }
   if (pthread_cond_destroy(&PRIO_QUEUE) != 0) {
-    if (errno == EINVAL) printf("No condition variable named COND_QUEUE\n");
-    else printf("Error while destroying condition variable COND_QUEUE\n");
+    if (errno == EINVAL) printf("No condition variable named PRIO_QUEUE\n");
+    else printf("Error while destroying condition variable PRIO_QUEUE\n");
   }
 
   /* Remove FIFO's */
@@ -272,17 +272,6 @@ void sigint_handler(int sig) { // ctrl + c
     logger(fp, "SIGINT RECEIVED");
     cleanup();
     exit(0);
-  }
-}
-
-void sigtstp_handler(int sig) { // ctrl + z
-  printf("\n");
-  if (sig == SIGTSTP) {
-    logger(fp, "SIGTSTP RECEIVED");
-    #ifdef DEBUG
-      printf("DEBUG >> %d workers available 🧌\n", sum_array(shm->workers, N_WORKERS)); fflush(stdout);
-      printf("DEBUG >> %d jobs in queue\n", queue->n);
-    #endif
   }
 }
 
@@ -407,13 +396,14 @@ void worker(int num) {
       if (msgsnd(mqid, &msg, sizeof(Message) - sizeof(long), 0) < 0) handle_error_log(fp, "SENDING MESSAGE TO USER");
     } else if (job.type == 0) { /* Job from sensor */
       Sensor s;
+      char key[STR];
       int val;
-      sscanf(job.content, " %[^#]#%[^#]#%d", s.id, s.key, &val);
+      sscanf(job.content, " %[^#]#%[^#]#%d", s.id, key, &val);
       sem_wait(BLOCK_SHM);
       /* Sensor doesn't exist && there is space for new sensor */
-      if (((i = searchSensor(shm->sensors, s, MAX_SENSORS)) == -1) && ((i = searchSensor(shm->sensors, NULL_SENSOR, MAX_SENSORS)) != -1)) shm->sensors[i] = s; // create sensor
+      if ((searchSensor(shm->sensors, s, MAX_SENSORS) == -1) && ((i = searchSensor(shm->sensors, NULL_SENSOR, MAX_SENSORS)) != -1)) shm->sensors[i] = s; // create sensor
       if (i != -1) { // sensor exist
-        if ((i = searchStat(shm->stats, s.key, MAX_KEYS)) != -1) { /* Key exist */
+        if ((i = searchStat(shm->stats, key, MAX_KEYS)) != -1) { /* Key exist */
           Stat *stat = &shm->stats[i];
           stat->avg = (stat->avg * stat->count + val) / (stat->count + 1); // update average
           stat->count++;
@@ -422,7 +412,7 @@ void worker(int num) {
           if (val > stat->max) stat->max = val;
           stat->checked = false;
         } else if ((i = searchStat(shm->stats, "", MAX_KEYS)) != -1) { /* Find empty key */
-          strcpy(shm->stats[i].key, s.key); // create key
+          strcpy(shm->stats[i].key, key); // create key
           Stat *stat = &shm->stats[i];
           stat->avg = val;
           stat->count = 1;
@@ -434,9 +424,9 @@ void worker(int num) {
       }
       sem_post(BLOCK_SHM);
       sem_post(WAIT_ALERT); // alert watcher to look for alerts
-      sprintf(log, "WORKER%d: %s DATA PROCESSING COMPLETED", num, s.key);
+      sprintf(log, "WORKER%d: %s DATA PROCESSING COMPLETED", num, key);
       #ifdef DEBUG
-        printf("DEBUG >> %s DATA PROCESSING COMPLETED\n", s.key);
+        printf("DEBUG >> %s DATA PROCESSING COMPLETED\n", key);
       #endif
     }
     logger(fp, log);
@@ -650,7 +640,6 @@ int main(int argc, char **argv) {
   act.sa_flags = 0;
   sigfillset(&act.sa_mask);
   sigdelset(&act.sa_mask, SIGINT);
-  sigdelset(&act.sa_mask, SIGTSTP);
   sigdelset(&act.sa_mask, SIGUSR1);
   sigdelset(&act.sa_mask, SIGUSR2);
   sigprocmask(SIG_SETMASK, &act.sa_mask, NULL); // this will block all signals
@@ -658,7 +647,6 @@ int main(int argc, char **argv) {
   /* Signal Handlers - for now both are blocked */
   act.sa_handler = SIG_IGN;
   sigaction(SIGINT, &act, NULL);
-  sigaction(SIGTSTP, &act, NULL);
   sigaction(SIGUSR1, &act, NULL); // to close threads
   sigaction(SIGUSR2, &act, NULL); // to close threads
 
@@ -667,9 +655,9 @@ int main(int argc, char **argv) {
   if ((BLOCK_LOGGER = sem_open(MUTEX_LOGGER, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error("INITIALIZING BLOCK_LOGGER SEMAPHORE");         // block when someone is using the log file
   if ((BLOCK_SHM = sem_open(MUTEX_SHM, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING BLOCK_SHM SEMAPHORE");          // block when someone is using the shared memory
   if ((WAIT_ALERT = sem_open(MUTEX_ALERT, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING WAIT_ALERT SEMAPHORE");      // block when someone is using the alerts array
-  if ((MUTEX_JOB = sem_open(MUTEX_WORKER, O_CREAT | O_EXCL, 0666, 0)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING MUTEX_WORKER SEMAPHORE");    // block when someone is using the workers array
+  if ((MUTEX_JOB = sem_open(MUTEX_WORKER, O_CREAT | O_EXCL, 0666, 0)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING MUTEX_JOB SEMAPHORE");    // block when someone is using the workers array
   if ((BLOCK_SENSOR = sem_open(MUTEX_SENSOR, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING BLOCK_SENSOR SEMAPHORE"); // block when someone is using the sensors array
-  if ((DISP = sem_open(MUTEX_DISPATCHER, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING MUTEX_DISPATCHER SEMAPHORE"); // block when someone is using the dispatcher (workers array)
+  if ((DISP = sem_open(MUTEX_DISPATCHER, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING DISP SEMAPHORE"); // block when someone is using the dispatcher (workers array)
 
   /* Create FIFO's */
   if (mkfifo(SENSOR_FIFO, 0666) == -1) handle_error_log(fp, "CREATING SENSOR FIFO");
@@ -735,8 +723,6 @@ int main(int argc, char **argv) {
   /* Re-enable signals */
   act.sa_handler = sigint_handler;
   sigaction(SIGINT, &act, NULL);
-  act.sa_handler = sigtstp_handler;
-  sigaction(SIGTSTP, &act, NULL);
   /* Signal for threads */
   act.sa_handler = sigusr1_handler;
   sigaction(SIGUSR1, &act, NULL);
