@@ -15,7 +15,6 @@
 
 #define DEBUG
 
-#define MUTEX_SENSOR "/mutex_sensor"
 #define MESSAGE_QUEUE_KEY 13579
 #define BUFFER 2048
 #define MAX 200

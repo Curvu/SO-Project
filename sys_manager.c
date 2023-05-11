@@ -68,7 +68,7 @@ pthread_mutex_t BLOCK_QUEUE = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t MUTEX_Q = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t COND_QUEUE = PTHREAD_COND_INITIALIZER;
 pthread_cond_t PRIO_QUEUE = PTHREAD_COND_INITIALIZER;
-sem_t *BLOCK_LOGGER, *BLOCK_SHM, *WAIT_ALERT, *MUTEX_JOB, *BLOCK_SENSOR;
+sem_t *BLOCK_LOGGER, *BLOCK_SHM, *WAIT_ALERT, *MUTEX_JOB;
 
 /* Thread Sensor Reader */
 pthread_t sensor_reader;
@@ -169,10 +169,6 @@ void cleanup() {
     if (errno == EINVAL) printf("No semaphore named WAIT_ALERT\n");
     else printf("Error while closing semaphore WAIT_ALERT\n");
   }
-  if (sem_close(BLOCK_SENSOR) != 0) {
-    if (errno != EINVAL) printf("No semaphore named BLOCK_SENSOR\n");
-    else printf("Errno while closing semaphore BLOCK_SENSOR\n");
-  }
   if (sem_close(DISP) != 0) {
     if (errno == EINVAL) printf("No semaphore named DISP\n");
     else printf("Error while closing semaphore DISP\n");
@@ -194,10 +190,6 @@ void cleanup() {
   if (sem_unlink(MUTEX_ALERT) != 0) {
     if (errno == ENOENT) printf("No semaphore named MUTEX_ALERT\n");
     else printf("Error while unlinking semaphore MUTEX_ALERT\n");
-  }
-  if (sem_unlink(MUTEX_SENSOR) != 0) {
-    if (errno == ENOENT) printf("No semaphore named MUTEX_SENSOR\n");
-    else printf("Error while unlinking semaphore MUTEX_SENSOR\n");
   }
   if (sem_unlink(MUTEX_DISPATCHER) != 0) {
     if (errno == ENOENT) printf("No semaphore named MUTEX_DISPATCHER\n");
@@ -493,7 +485,6 @@ void * sensor_reader_func(void * param) {
     act.sa_handler = sigusr1_handler;
     sigaction(SIGUSR1, &act, NULL);
 
-    sem_post(BLOCK_SENSOR);
     if ((size = read(fd_sensor, job.content, MAX)) < 0) handle_error_log(fp, "read sensor fifo");
     job.content[size] = '\0';
 
@@ -663,7 +654,6 @@ int main(int argc, char **argv) {
   if ((BLOCK_SHM = sem_open(MUTEX_SHM, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING BLOCK_SHM SEMAPHORE");          // block when someone is using the shared memory
   if ((WAIT_ALERT = sem_open(MUTEX_ALERT, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING WAIT_ALERT SEMAPHORE");      // block when someone is using the alerts array
   if ((MUTEX_JOB = sem_open(MUTEX_WORKER, O_CREAT | O_EXCL, 0666, 0)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING MUTEX_JOB SEMAPHORE");    // block when someone is using the workers array
-  if ((BLOCK_SENSOR = sem_open(MUTEX_SENSOR, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING BLOCK_SENSOR SEMAPHORE"); // block when someone is using the sensors array
   if ((DISP = sem_open(MUTEX_DISPATCHER, O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED) handle_error_log(fp, "INITIALIZING DISP SEMAPHORE"); // block when someone is using the dispatcher (workers array)
 
   /* Create FIFO's */
